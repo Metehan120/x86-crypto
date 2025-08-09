@@ -178,6 +178,8 @@ pub mod other_instructions;
 /// This module provides integration with the TLS record layer, enabling
 /// secure communication using AES-GCM via hardware acceleration.
 ///
+/// # THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
+///
 /// # Features
 /// - Compatible with `rustls` record layer
 /// - Implements `MessageEncrypter` and `MessageDecrypter` traits
