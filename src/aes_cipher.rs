@@ -31,104 +31,144 @@ static NONCE_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
+#[deprecated(since = "0.2.0", note = "Use [`Nonce96`] instead")]
+/// Will be removed in 0.3.0
 pub struct Nonce([u8; 12]);
+pub struct Nonce96([u8; 12]);
 
-impl Nonce {
-    pub fn generate_nonce(generator: &mut impl CryptoRNG) -> Nonce {
-        #[cfg(feature = "dev-logs")]
-        trace!("Generating Nonce");
-        let mut nonce = [0u8; 12];
-        generator.fill_by_unchecked(&mut nonce);
-        #[cfg(feature = "dev-logs")]
-        trace!("Generated Nonce: {:02X?}", nonce);
-        Nonce(nonce)
-    }
+macro_rules! impl_nonce {
+    ($nonce:ident) => {
+        #[allow(deprecated)]
+        impl $nonce {
+            pub fn generate_nonce(generator: &mut impl CryptoRNG) -> $nonce {
+                #[cfg(feature = "dev-logs")]
+                trace!("Generating Nonce");
+                let mut nonce = [0u8; 12];
+                generator.fill_by_unchecked(&mut nonce);
+                #[cfg(feature = "dev-logs")]
+                trace!("Generated Nonce: {:02X?}", nonce);
+                $nonce(nonce)
+            }
 
-    pub fn generate_with_token(generator: &mut impl CryptoRNG) -> (Nonce, u64) {
-        #[cfg(feature = "dev-logs")]
-        trace!("Generating Nonce");
-        let mut nonce = [0u8; 12];
-        generator.fill_by_unchecked(&mut nonce);
-        let generated = Nonce(nonce);
-        let token = NONCE_TOKEN.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+            pub fn generate_with_token(generator: &mut impl CryptoRNG) -> ($nonce, u64) {
+                #[cfg(feature = "dev-logs")]
+                trace!("Generating Nonce");
+                let mut nonce = [0u8; 12];
+                generator.fill_by_unchecked(&mut nonce);
+                let generated = $nonce(nonce);
+                let token = NONCE_TOKEN.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
 
-        #[cfg(feature = "dev-logs")]
-        debug!("Nonce+Token pair created for session tracking");
-        #[cfg(feature = "dev-logs")]
-        trace!(
-            "Generated Nonce: {:02X?}, Generated Token: {}",
-            nonce, token
-        );
+                #[cfg(feature = "dev-logs")]
+                debug!("Nonce+Token pair created for session tracking");
+                #[cfg(feature = "dev-logs")]
+                trace!(
+                    "Generated Nonce: {:02X?}, Generated Token: {}",
+                    nonce, token
+                );
 
-        (generated, token)
-    }
+                (generated, token)
+            }
 
-    pub fn from_bytes(bytes: [u8; 12]) -> Nonce {
-        Nonce(bytes)
-    }
+            pub fn from_bytes(bytes: [u8; 12]) -> $nonce {
+                $nonce(bytes)
+            }
 
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
+            pub fn as_slice(&self) -> &[u8] {
+                &self.0
+            }
 
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.as_slice().to_vec()
-    }
+            pub fn to_vec(&self) -> Vec<u8> {
+                self.as_slice().to_vec()
+            }
+        }
+    };
 }
+
+impl_nonce!(Nonce);
+impl_nonce!(Nonce96);
 
 types! {
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use [`Tag128`] instead"
+    )]
+    /// Will be removed in 0.3.0
     type Tag: [u8; 16];
-    impl deref Tag, [u8; 16]
+
+    type Tag128: [u8; 16];
+    impl deref Tag128, [u8; 16]
 }
 
-impl PartialEq for Tag {
-    fn eq(&self, other: &Self) -> bool {
-        constant_time_ops::compare_bytes(&self.0, &other.0) == 1
-    }
+macro_rules! impl_tag {
+    ($tag:ident) => {
+        #[allow(deprecated)]
+        impl PartialEq for $tag {
+            fn eq(&self, other: &Self) -> bool {
+                constant_time_ops::compare_bytes(&self.0, &other.0) == 1
+            }
+        }
+
+        #[allow(deprecated)]
+        impl Drop for $tag {
+            fn drop(&mut self) {
+                self.0.zeroize();
+            }
+        }
+
+        #[allow(deprecated)]
+        impl AsRef<[u8]> for $tag {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+
+        #[allow(deprecated)]
+        impl From<[u8; 16]> for $tag {
+            fn from(arr: [u8; 16]) -> Self {
+                Self(arr)
+            }
+        }
+
+        #[allow(deprecated)]
+        impl $tag {
+            #[inline]
+            pub fn from_array(arr: [u8; 16]) -> Self {
+                Self(arr)
+            }
+            #[inline]
+            pub fn try_from_slice(s: &[u8]) -> Option<Self> {
+                (s.len() == 16).then(|| {
+                    let mut a = [0u8; 16];
+                    a.copy_from_slice(s);
+                    Self(a)
+                })
+            }
+            #[inline]
+            pub fn as_bytes(&self) -> &[u8; 16] {
+                &self.0
+            }
+            #[inline]
+            pub fn expose<F, R>(&self, f: F) -> R
+            where
+                F: FnOnce(&[u8; 16]) -> R,
+            {
+                f(&self.0)
+            }
+        }
+    };
 }
 
-impl Drop for Tag {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
+#[allow(deprecated)]
+impl Deref for Tag {
+    type Target = [u8; 16];
 
-impl AsRef<[u8]> for Tag {
-    fn as_ref(&self) -> &[u8] {
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl From<[u8; 16]> for Tag {
-    fn from(arr: [u8; 16]) -> Self {
-        Self(arr)
-    }
-}
 
-impl Tag {
-    #[inline]
-    pub fn from_array(arr: [u8; 16]) -> Self {
-        Self(arr)
-    }
-    #[inline]
-    pub fn try_from_slice(s: &[u8]) -> Option<Self> {
-        (s.len() == 16).then(|| {
-            let mut a = [0u8; 16];
-            a.copy_from_slice(s);
-            Self(a)
-        })
-    }
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-    #[inline]
-    pub fn expose<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&[u8; 16]) -> R,
-    {
-        f(&self.0)
-    }
-}
+impl_tag!(Tag);
+impl_tag!(Tag128);
 
 #[inline]
 fn assert_size_ok(len_bytes: usize, start_counter: u32) -> Result<(), AesError> {
@@ -220,7 +260,7 @@ impl Aes256CTR {
         aes.perform_aes256_rounds_block(self.round_keys, block)
     }
 
-    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce) -> Result<Vec<u8>, AesError> {
+    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
         assert_size_ok(src.as_ref().len(), 1)?;
 
         let mut data = src.as_ref().to_vec();
@@ -283,7 +323,7 @@ impl Aes256CTR {
     pub fn encrypt_inplace<T: AsMut<[u8]>>(
         &self,
         src_dst: &mut T,
-        nonce: Nonce,
+        nonce: Nonce96,
     ) -> Result<(), AesError> {
         assert_size_ok(src_dst.as_mut().len(), 1)?;
 
@@ -343,14 +383,14 @@ impl Aes256CTR {
         Ok(())
     }
 
-    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce) -> Result<Vec<u8>, AesError> {
+    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
         self.encrypt(src, nonce)
     }
 
     pub fn decrypt_inplace<T: AsMut<[u8]>>(
         &self,
         src_dst: &mut T,
-        nonce: Nonce,
+        nonce: Nonce96,
     ) -> Result<(), AesError> {
         self.encrypt_inplace(src_dst, nonce)
     }
@@ -432,7 +472,7 @@ impl Aes256 {
         aes.perform_aes256_rounds_block(self.round_keys, block)
     }
 
-    fn ctr_inplace(&self, src: &mut [u8], nonce: &Nonce) -> Result<(), AesError> {
+    fn ctr_inplace(&self, src: &mut [u8], nonce: &Nonce96) -> Result<(), AesError> {
         assert_size_ok(src.len(), 2)?;
 
         let chunk_size = 16;
@@ -529,7 +569,7 @@ impl Aes256 {
     pub fn encrypt_with_aad<T: AsRef<[u8]>>(
         &self,
         src: T,
-        nonce: Nonce,
+        nonce: Nonce96,
         aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
         use crate::memory_obfuscation::Zeroize;
@@ -550,37 +590,37 @@ impl Aes256 {
         Ok(data)
     }
 
-    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce) -> Result<Vec<u8>, AesError> {
+    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
         self.encrypt_with_aad(src, nonce, &[])
     }
 
     pub fn encrypt_inplace_with_aad<T: AsMut<[u8]>>(
         &self,
         src_dst: &mut T,
-        nonce: Nonce,
+        nonce: Nonce96,
         aad: &[u8],
-    ) -> Result<Tag, AesError> {
+    ) -> Result<Tag128, AesError> {
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM encryption");
         self.ctr_inplace(src_dst.as_mut(), &nonce)?;
         let tag = self.compute_tag(aad, nonce.0, src_dst.as_mut());
         #[cfg(feature = "audit-logs")]
         info!("GCM encryption completed");
-        Ok(Tag::from_array(tag))
+        Ok(Tag128::from_array(tag))
     }
 
     pub fn encrypt_inplace<T: AsMut<[u8]>>(
         &self,
         src_dst: &mut T,
-        nonce: Nonce,
-    ) -> Result<Tag, AesError> {
+        nonce: Nonce96,
+    ) -> Result<Tag128, AesError> {
         self.encrypt_inplace_with_aad(src_dst, nonce, &[])
     }
 
     pub fn decrypt_with_aad<T: AsRef<[u8]>>(
         &self,
         src: T,
-        nonce: Nonce,
+        nonce: Nonce96,
         aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
         use crate::memory_obfuscation::Zeroize;
@@ -615,16 +655,16 @@ impl Aes256 {
         Ok(ciphertext)
     }
 
-    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce) -> Result<Vec<u8>, AesError> {
+    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
         self.decrypt_with_aad(src, nonce, &[])
     }
 
     pub fn decrypt_inplace_with_tag_aad<T: AsMut<[u8]>>(
         &self,
         src_dst: &mut T,
-        nonce: Nonce,
+        nonce: Nonce96,
         aad: &[u8],
-        tag: Tag,
+        tag: Tag128,
     ) -> Result<(), AesError> {
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM decryption");
@@ -650,8 +690,8 @@ impl Aes256 {
     pub fn decrypt_inplace_with_tag<T: AsMut<[u8]>>(
         &self,
         src: &mut T,
-        nonce: Nonce,
-        tag: Tag,
+        nonce: Nonce96,
+        tag: Tag128,
     ) -> Result<(), AesError> {
         self.decrypt_inplace_with_tag_aad(src, nonce, &[], tag)
     }

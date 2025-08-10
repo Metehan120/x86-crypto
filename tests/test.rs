@@ -1,6 +1,6 @@
 pub use x86_crypto::*;
 use x86_crypto::{
-    aes_cipher::{Aes256, Nonce},
+    aes_cipher::{Aes256, Nonce96},
     allocator::SecureVec,
     hw_chacha::HWChaCha20Rng,
     memory_obfuscation::Zeroize,
@@ -18,7 +18,7 @@ fn general() {
     key2.copy_from_slice(&key);
 
     let test = Aes256::new(&key).unwrap();
-    let nonce = Nonce::generate_nonce(&mut HardwareRNG);
+    let nonce = Nonce96::generate_nonce(&mut HardwareRNG);
     let mut output = test.encrypt(&data, nonce).unwrap();
 
     key.zeroize();
@@ -41,7 +41,7 @@ fn compare_with_aes_gcm_no_aad() {
     let msg = (0u8..200).collect::<Vec<u8>>();
 
     // ours: ct||tag
-    let out = ours.encrypt(&msg, Nonce::from_bytes(nonce)).unwrap();
+    let out = ours.encrypt(&msg, Nonce96::from_bytes(nonce)).unwrap();
     let (ct_ours, tag_ours) = out.split_at(out.len() - 16);
 
     // ref
@@ -55,7 +55,7 @@ fn compare_with_aes_gcm_no_aad() {
     assert_eq!(tag_ours, tag_ref, "tag mismatch");
 
     // roundtrip both ways
-    let dec = ours.decrypt(&out, Nonce::from_bytes(nonce)).unwrap();
+    let dec = ours.decrypt(&out, Nonce96::from_bytes(nonce)).unwrap();
     assert_eq!(dec, msg);
 
     let ref_dec = ref_cipher
@@ -75,7 +75,7 @@ fn compare_with_aes_gcm_with_aad_and_tails() {
         let msg = (0..len).map(|i| i as u8).collect::<Vec<u8>>();
 
         let out = ours
-            .encrypt_with_aad(&msg, Nonce::from_bytes(nonce), aad)
+            .encrypt_with_aad(&msg, Nonce96::from_bytes(nonce), aad)
             .unwrap();
         let (ct_ours, tag_ours) = out.split_at(out.len() - 16);
 
@@ -93,14 +93,14 @@ fn compare_with_aes_gcm_with_aad_and_tails() {
 
         // verify our decrypt_with_aad accepts ref output as well
         let dec = ours
-            .decrypt_with_aad(ref_out.clone(), Nonce::from_bytes(nonce), aad)
+            .decrypt_with_aad(ref_out.clone(), Nonce96::from_bytes(nonce), aad)
             .unwrap();
         assert_eq!(dec, msg, "cross-decrypt failed len={len}");
 
         // inplace API cross-check
         let mut buf = msg.clone();
         let tag = ours
-            .encrypt_inplace_with_aad(&mut buf, Nonce::from_bytes(nonce), aad)
+            .encrypt_inplace_with_aad(&mut buf, Nonce96::from_bytes(nonce), aad)
             .unwrap();
         // build ct||tag like aes-gcm output
         let mut ours_concat = buf.clone();
