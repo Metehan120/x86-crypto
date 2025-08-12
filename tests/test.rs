@@ -1,7 +1,7 @@
 pub use x86_crypto::*;
 use x86_crypto::{
-    aes_cipher::{Aes256, Nonce96},
     allocator::SecureVec,
+    ciphers::aes_cipher::{Aes256, Nonce96},
     hw_chacha::HWChaCha20Rng,
     memory_obfuscation::Zeroize,
 };

@@ -123,44 +123,48 @@ pub mod ni_instructions;
 pub mod simd;
 
 #[cfg(all(feature = "aes_cipher", feature = "std"))]
-/// Hardware-accelerated AES (Advanced Encryption Standard) implementations.
-///
-/// # Security Notice
-/// Uses hardware-accelerated cryptographic primitives and established libraries.
-/// While implementation follows standard practices, independent security
-/// review is recommended for high-stakes applications.
-///
-/// Provides AES-256 encryption in multiple modes using Intel AES-NI instructions
-/// for maximum performance and security. All implementations use hardware acceleration.
-///
-/// # Available Modes
-/// - **`AES256ECB`**: Electronic Codebook mode (educational/testing only)
-/// - **`Aes256CTR`**: Counter mode for stream encryption
-/// - **`Aes256`**: GCM mode with authentication (recommended default)
-///
-/// # Performance
-/// - Intel AES-NI hardware acceleration
-/// - Parallel processing with multi-core support
-/// - Typical throughput: 1-8 GB/s depending on mode and CPU
-///
-/// # Quick Start
-/// ```rust
-/// use x86_crypto::{Aes256, HardwareRNG, CryptoRNG};
-///
-/// let mut rng = HardwareRNG;
-/// let key: [u8; 32] = rng.try_generate()?;
-/// let nonce: [u8; 12] = rng.try_generate()?;
-///
-/// let aes = Aes256::new(key);
-/// let encrypted = aes.encrypt(&plaintext, nonce);
-/// let decrypted = aes.decrypt(&encrypted, nonce)?;
-/// ```
-///
-/// # Mode Selection Guide
-/// - **Production**: Use `Aes256` (GCM mode with authentication)
-/// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
-/// - **Education/Testing**: Use `AES256ECB` (never in production!)
-pub mod aes_cipher;
+pub mod ciphers {
+    /// Hardware-accelerated AES (Advanced Encryption Standard) implementations.
+    ///
+    /// # Security Notice
+    /// Uses hardware-accelerated cryptographic primitives and established libraries.
+    /// While implementation follows standard practices, independent security
+    /// review is recommended for high-stakes applications.
+    ///
+    /// Provides AES-256 encryption in multiple modes using Intel AES-NI instructions
+    /// for maximum performance and security. All implementations use hardware acceleration.
+    ///
+    /// # Available Modes
+    /// - **`Aes256CTR`**: Counter mode for stream encryption
+    /// - **`Aes256`**: GCM mode with authentication (recommended default)
+    ///
+    /// # Performance
+    /// - Intel AES-NI hardware acceleration
+    /// - Parallel processing with multi-core support
+    /// - Typical throughput: 1-8 GB/s depending on mode and CPU
+    ///
+    /// # Quick Start
+    /// ```rust
+    /// use x86_crypto::{Aes256, HardwareRNG, CryptoRNG};
+    ///
+    /// let mut rng = HardwareRNG;
+    /// let key: [u8; 32] = rng.try_generate()?;
+    /// let nonce: [u8; 12] = rng.try_generate()?;
+    ///
+    /// let aes = Aes256::new(key);
+    /// let encrypted = aes.encrypt(&plaintext, nonce);
+    /// let decrypted = aes.decrypt(&encrypted, nonce)?;
+    /// ```
+    ///
+    /// # Mode Selection Guide
+    /// - **Production**: Use `Aes256` (GCM mode with authentication)
+    /// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
+    pub mod aes_cipher;
+
+    #[cfg(all(feature = "std", feature = "experimental_vaes"))]
+    /// THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
+    pub mod vaes_cipher;
+}
 
 /// Additional x86 specialized instructions beyond the main cryptographic instruction sets.
 ///

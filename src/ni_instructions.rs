@@ -40,7 +40,10 @@ pub mod aesni {
         ops::Deref,
     };
 
-    use log::{debug, trace};
+    #[cfg(feature = "dev-logs")]
+    use log::debug;
+
+    use log::trace;
 
     use crate::types;
 
@@ -85,6 +88,7 @@ pub mod aesni {
     /// `loadu` means unaligned
     #[inline(always)]
     pub fn loadu_keys_128(keys: [__m128i; 11]) -> __rsi128keys {
+        #[cfg(feature = "dev-logs")]
         debug!("Loaded AES-128 keys into __rsi128keys wrapper");
         __rsi128keys(keys)
     }
@@ -93,6 +97,7 @@ pub mod aesni {
     /// `loadu` means unaligned
     #[inline(always)]
     pub fn loadu_keys_192(keys: [__m128i; 13]) -> __rsi192keys {
+        #[cfg(feature = "dev-logs")]
         debug!("Loaded AES-192 keys into __rsi192keys wrapper");
         __rsi192keys(keys)
     }
@@ -101,6 +106,7 @@ pub mod aesni {
     /// `loadu` means unaligned
     #[inline(always)]
     pub fn loadu_keys_256(keys: [__m128i; 15]) -> __rsi256keys {
+        #[cfg(feature = "dev-logs")]
         debug!("Loaded AES-256 keys into __rsi256keys wrapper");
         __rsi256keys(keys)
     }
@@ -111,8 +117,16 @@ pub mod aesni {
     /// `loadu` means unaligned
     #[inline(always)]
     pub fn loadu_keys_512(keys: [__m128i; 23]) -> __rsi512keys {
+        #[cfg(feature = "dev-logs")]
         debug!("Loaded AES-512 keys into __rsi512keys wrapper (future-proof)");
         __rsi512keys(keys)
+    }
+
+    #[inline(always)]
+    pub fn storeu_keys_256(keys: __rsi256keys) -> [__m128i; 15] {
+        #[cfg(feature = "dev-logs")]
+        debug!("Stored AES-256 keys from __rsi256keys wrapper");
+        keys.0
     }
 
     #[allow(non_camel_case_types)]
@@ -345,12 +359,13 @@ pub mod vaes {
     use core::{
         arch::{
             asm,
-            x86_64::{__m256i, _mm256_loadu_si256, _mm256_storeu_si256},
+            x86_64::{__m128i, __m256i, _mm_aesimc_si128, _mm256_loadu_si256, _mm256_storeu_si256},
         },
         ops::Deref,
     };
     use std::is_x86_feature_detected;
 
+    #[cfg(feature = "dev-logs")]
     use log::warn;
 
     use crate::types;
@@ -361,8 +376,8 @@ pub mod vaes {
         /// complete expanded key schedule for an AES-256 cipher.
         ///
         /// Implements `Deref` to allow ergonomic access to the inner array.
-        type __vaes256keys: 8 x __vaes256key;
-        impl deref __vaes256keys, [__vaes256key; 8]
+        type __vaes256keys: 15 x __vaes256key;
+        impl deref __vaes256keys, [__vaes256key; 15]
 
         #[derive(Debug, Clone, Copy)]
         /// A type-safe wrapper for an array of 23 `__vaes256key`s, representing the
@@ -371,8 +386,8 @@ pub mod vaes {
         /// # THIS TYPE IS FOR FUTURE-PROOFING
         ///
         /// Implements `Deref` to allow ergonomic access to the inner array.
-        type __vaes512keys: 12 x __vaes256key;
-        impl deref __vaes512keys, [__vaes256key; 12]
+        type __vaes512keys: 23 x __vaes256key;
+        impl deref __vaes512keys, [__vaes256key; 23]
     }
 
     types! {
@@ -380,22 +395,30 @@ pub mod vaes {
         /// A type-safe wrapper for a `__m256i` value, representing a 256-bit data block
         /// for an AES operation.
         type __vaes256i: __m256i;
+        impl deref __vaes256i, __m256i
 
         #[derive(Debug, Clone, Copy)]
         /// A type-safe wrapper for a `__m256i` value, representing a 256-bit round key
         /// for a single AES round.
         type __vaes256key: __m256i;
+        impl deref __vaes256key, __m256i
+    }
+
+    impl __vaes256i {
+        pub fn as_mm256i(&self) -> __m256i {
+            self.0
+        }
     }
 
     #[inline(always)]
-    pub fn loadu_vaes256keys(keys: [__vaes256key; 8]) -> __vaes256keys {
+    pub fn loadu_vaes256keys(keys: [__vaes256key; 15]) -> __vaes256keys {
         #[cfg(feature = "dev-logs")]
         warn!("VAES-256 keys loaded (experimental)");
         __vaes256keys(keys)
     }
 
     #[inline(always)]
-    pub fn loadu_vaes512keys(keys: [__vaes256key; 12]) -> __vaes512keys {
+    pub fn loadu_vaes512keys(keys: [__vaes256key; 23]) -> __vaes512keys {
         #[cfg(feature = "dev-logs")]
         warn!("VAES-512 keys loaded (experimental)");
         __vaes512keys(keys)
@@ -411,8 +434,21 @@ pub mod vaes {
     /// valid, readable memory.
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn loadu_vaes(data: *const u8) -> __vaes256i {
+        #[cfg(feature = "dev-logs")]
         warn!("VAES Data loaded, VAES is experimental use carefully");
         __vaes256i(_mm256_loadu_si256(data as *const __m256i))
+    }
+
+    #[inline(always)]
+    /// Loads 32 bytes from a `__m256i` into a `__vaes256i` block.
+    ///
+    /// # Safety
+    /// The caller must ensure that `data` points to at least 32 bytes of
+    /// valid, readable memory.
+    pub fn loadu_vaes256_mm256i(data: __m256i) -> __vaes256i {
+        #[cfg(feature = "dev-logs")]
+        warn!("VAES Data loaded, VAES is experimental use carefully");
+        __vaes256i(data)
     }
 
     #[inline(always)]
@@ -425,8 +461,21 @@ pub mod vaes {
     /// valid, readable memory.
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn loadu_vaeskey(key: *const u8) -> __vaes256key {
+        #[cfg(feature = "dev-logs")]
         warn!("VAES Keys loaded, VAES is experimental use carefully");
         __vaes256key(_mm256_loadu_si256(key as *const __m256i))
+    }
+
+    #[inline(always)]
+    /// Loads 32 bytes from a `__m256i` into a `__vaes256key` block.
+    ///
+    /// # Safety
+    /// The caller must ensure that `key` points to at least 32 bytes of
+    /// valid, readable memory.
+    pub fn loadu_vaeskey_m256i(key: __m256i) -> __vaes256key {
+        #[cfg(feature = "dev-logs")]
+        warn!("VAES Keys loaded, VAES is experimental use carefully");
+        __vaes256key(key)
     }
 
     #[inline(always)]
@@ -455,11 +504,25 @@ pub mod vaes {
         _mm256_storeu_si256(output as *mut __m256i, data.0)
     }
 
+    #[inline(always)]
+    #[allow(unsafe_op_in_unsafe_fn)]
+    pub fn make_dec_keys_128(rk_enc: &[__m128i; 15]) -> [__m128i; 15] {
+        unsafe {
+            let mut dec: [__m128i; 15] = core::mem::zeroed();
+            dec[0] = rk_enc[14];
+            for i in 1..14 {
+                dec[i] = _mm_aesimc_si128(rk_enc[14 - i]);
+            }
+            dec[14] = rk_enc[0];
+            dec
+        }
+    }
+
     /// Performs one intermediate round of AES encryption using the `vaesenc` instruction.
     ///
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
-    #[inline(always)]
+    #[target_feature(enable = "vaes,avx")]
     pub unsafe fn vaesenc(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
         if is_x86_feature_detected!("vaes") {
             let mut result = data.0;
@@ -468,7 +531,7 @@ pub mod vaes {
                     "vaesenc {0}, {0}, {1}",
                     inout(ymm_reg) result,
                     in(ymm_reg) round_key.0,
-                    options(nostack, nomem)
+                    options(nostack, nomem, preserves_flags)
                 );
             }
             __vaes256i(result)
@@ -481,7 +544,7 @@ pub mod vaes {
     ///
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
-    #[inline(always)]
+    #[target_feature(enable = "vaes,avx")]
     pub unsafe fn vaesdec(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
         if is_x86_feature_detected!("vaes") {
             let mut result = data.0;
@@ -491,7 +554,7 @@ pub mod vaes {
                     "vaesdec {0}, {0}, {1}",
                     inout(ymm_reg) result,
                     in(ymm_reg) round_key.0,
-                    options(nostack, nomem)
+                    options(nostack, nomem, preserves_flags)
                 );
             }
             __vaes256i(result)
@@ -504,7 +567,7 @@ pub mod vaes {
     ///
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
-    #[inline(always)]
+    #[target_feature(enable = "vaes,avx")]
     pub unsafe fn vaesenc_last(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
         if is_x86_feature_detected!("vaes") {
             let mut result = data.0;
@@ -513,7 +576,7 @@ pub mod vaes {
                     "vaesenclast {0}, {0}, {1}",
                     inout(ymm_reg) result,
                     in(ymm_reg) round_key.0,
-                    options(nostack, nomem)
+                    options(nostack, nomem, preserves_flags)
                 );
             }
             __vaes256i(result)
@@ -526,7 +589,7 @@ pub mod vaes {
     ///
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
-    #[inline(always)]
+    #[target_feature(enable = "vaes,avx")]
     pub unsafe fn vaesdec_last(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
         if is_x86_feature_detected!("vaes") {
             let mut result = data.0;
@@ -535,7 +598,7 @@ pub mod vaes {
                     "vaesdeclast {0}, {0}, {1}",
                     inout(ymm_reg) result,
                     in(ymm_reg) round_key.0,
-                    options(nostack, nomem)
+                    options(nostack, nomem, preserves_flags)
                 );
             }
             __vaes256i(result)

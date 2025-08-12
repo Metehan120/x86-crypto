@@ -12,7 +12,7 @@ use rustls::{
 };
 
 use crate::{
-    aes_cipher::{Aes256, AesError, Nonce},
+    ciphers::aes_cipher::{Aes256, AesError, Nonce},
     memory_obfuscation::Zeroize,
 };
 
