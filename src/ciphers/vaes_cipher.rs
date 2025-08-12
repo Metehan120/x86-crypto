@@ -341,30 +341,44 @@ impl Vaes256 {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[test]
+fn test_vaes_encrypt_aesgcm_decrypt() {
     use crate::{
         HardwareRNG,
-        ciphers::aes_cipher::{Aes256, Nonce96, Tag128},
+        ciphers::vaes_cipher::{Nonce192, Vaes256},
+    };
+    use aes_gcm::{
+        Aes256Gcm,
+        aead::{AeadInPlace, KeyInit, generic_array::GenericArray},
     };
 
-    use super::*;
+    let key = [1u8; 32];
 
-    #[test]
-    fn test_encrypt() {
-        let key = [1u8; 32];
-        let cipher = Vaes256::new(&key);
-        let aes = Aes256::new(&key).unwrap();
-        let nonce = Nonce192::generate_nonce(&mut HardwareRNG);
-        let mut bytes = [0u8; 12];
-        bytes.copy_from_slice(&nonce.0[..12]);
+    let vaes = Vaes256::new(&key);
 
-        let nonce2 = Nonce96::from_bytes(bytes);
-        let mut plaintext = vec![0u8; 128];
-        let tag = cipher.encrypt(&mut plaintext, nonce);
-        aes.decrypt_inplace_with_tag(&mut plaintext, nonce2, Tag128::from_array(tag))
-            .unwrap();
+    let aes_gcm = Aes256Gcm::new(GenericArray::from_slice(&key));
 
-        println!("{:?}", plaintext)
-    }
+    let nonce192 = Nonce192::generate_nonce(&mut HardwareRNG);
+    let mut nonce96_bytes = [0u8; 12];
+    nonce96_bytes.copy_from_slice(&nonce192.0[..12]);
+
+    let mut plaintext = (0u8..128).collect::<Vec<_>>();
+
+    let tag = vaes.encrypt(&mut plaintext, nonce192);
+
+    let mut ct_and_tag = plaintext.clone();
+    ct_and_tag.extend_from_slice(&tag);
+
+    let aes_nonce = aes_gcm::aead::generic_array::GenericArray::from_slice(&nonce96_bytes);
+
+    let mut decrypted = ct_and_tag.clone();
+    aes_gcm
+        .decrypt_in_place(aes_nonce, b"", &mut decrypted)
+        .expect("AES-GCM decrypt failed");
+
+    assert_eq!(decrypted, (0u8..128).collect::<Vec<_>>());
+
+    println!("{:?}", decrypted);
+
+    println!("✅ VAES encrypt → AES-GCM decrypt successful!");
 }

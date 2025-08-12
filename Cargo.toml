@@ -14,13 +14,7 @@ categories = ["cryptography", "hardware-support", "no-std"]
 github-actions = { repository = "Metehan120/x86-crypto", workflow = "Rust Tests" }
 
 [features]
-default = [
-    "std",
-    "secure_memory",
-    "all_aes",
-    "audit-logs",
-    "experimental_vaes_cipher",
-]
+default = ["std", "secure_memory", "all_aes", "audit-logs"]
 std = []
 compression_test = ["lz4_flex"]
 secure_memory = ["libc"]
@@ -36,7 +30,6 @@ trace-logs = []
 debug-alloc = []
 cipher-prefetch-warn = []
 vaes_asm_cipher = []
-experimental_vaes_cipher = []
 all = ["compression_test", "secure_memory", "all_aes", "tls"]
 
 [dependencies]
