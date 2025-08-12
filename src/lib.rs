@@ -161,7 +161,7 @@ pub mod ciphers {
     /// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
     pub mod aes_cipher;
 
-    #[cfg(all(feature = "std", feature = "experimental_vaes"))]
+    #[cfg(all(feature = "std", feature = "experimental_vaes_cipher"))]
     /// THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
     pub mod vaes_cipher;
 }

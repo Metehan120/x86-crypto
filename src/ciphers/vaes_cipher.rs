@@ -5,10 +5,17 @@ use crate::{
     ni_instructions::{
         LoadRegister,
         aesni::{AES, AES_NI, storeu_keys_256},
-        vaes::{__vaes256i, loadu_vaes256_mm256i, loadu_vaeskey_m256i, vaesenc, vaesenc_last},
+        vaes::{__vaes256i, loadu_vaes256_mm256i, loadu_vaeskey_m256i},
     },
     types,
 };
+
+#[cfg(feature = "vaes_asm_cipher")]
+use crate::ni_instructions::vaes::{vaesenc_asm, vaesenc_last_asm};
+
+#[cfg(not(feature = "vaes_asm_cipher"))]
+use crate::ni_instructions::vaes::{vaesenc_intrinsic, vaesenc_last_intrinsic};
+
 use core::{
     arch::x86_64::{
         __m256i, _mm256_broadcastsi128_si256, _mm256_loadu_si256, _mm256_storeu_si256,
@@ -111,15 +118,25 @@ impl Vaes256CTR {
 
     fn encrypt_block(&self, mut plaintext: __m256i) -> __vaes256i {
         plaintext = unsafe { _mm256_xor_si256(plaintext, self.key[0]) };
-        let mut plaintext = loadu_vaes256_mm256i(plaintext);
+        let mut block = loadu_vaes256_mm256i(plaintext);
 
-        for i in 1..14 {
-            plaintext = unsafe { vaesenc(plaintext, loadu_vaeskey_m256i(self.key[i])) };
+        #[cfg(feature = "vaes_asm_cipher")]
+        {
+            for i in 1..14 {
+                block = unsafe { vaesenc_asm(block, loadu_vaeskey_m256i(self.key[i])) };
+            }
+            block = unsafe { vaesenc_last_asm(block, loadu_vaeskey_m256i(self.key[14])) };
         }
 
-        plaintext = unsafe { vaesenc_last(plaintext, loadu_vaeskey_m256i(self.key[14])) };
+        #[cfg(not(feature = "vaes_asm_cipher"))]
+        {
+            for i in 1..14 {
+                block = unsafe { vaesenc_intrinsic(block, loadu_vaeskey_m256i(self.key[i])) };
+            }
+            block = unsafe { vaesenc_last_intrinsic(block, loadu_vaeskey_m256i(self.key[14])) };
+        }
 
-        plaintext
+        block
     }
 
     pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) {
@@ -207,15 +224,25 @@ impl Vaes256 {
 
     fn encrypt_block(&self, mut plaintext: __m256i) -> __vaes256i {
         plaintext = unsafe { _mm256_xor_si256(plaintext, self.key[0]) };
-        let mut plaintext = loadu_vaes256_mm256i(plaintext);
+        let mut block = loadu_vaes256_mm256i(plaintext);
 
-        for i in 1..14 {
-            plaintext = unsafe { vaesenc(plaintext, loadu_vaeskey_m256i(self.key[i])) };
+        #[cfg(feature = "vaes_asm_cipher")]
+        {
+            for i in 1..14 {
+                block = unsafe { vaesenc_asm(block, loadu_vaeskey_m256i(self.key[i])) };
+            }
+            block = unsafe { vaesenc_last_asm(block, loadu_vaeskey_m256i(self.key[14])) };
         }
 
-        plaintext = unsafe { vaesenc_last(plaintext, loadu_vaeskey_m256i(self.key[14])) };
+        #[cfg(not(feature = "vaes_asm_cipher"))]
+        {
+            for i in 1..14 {
+                block = unsafe { vaesenc_intrinsic(block, loadu_vaeskey_m256i(self.key[i])) };
+            }
+            block = unsafe { vaesenc_last_intrinsic(block, loadu_vaeskey_m256i(self.key[14])) };
+        }
 
-        plaintext
+        block
     }
 
     fn ctr(&self, plaintext: &mut [u8], nonce: Nonce192) {

@@ -346,24 +346,27 @@ pub mod pclmul {
     }
 }
 
-#[cfg(all(any(feature = "experimental_vaes", doc), feature = "std"))]
 /// Provides low-level, hardware-accelerated access to the VAES (Vector AES)
 /// instruction set on x86_64 CPUs.
 ///
-/// # THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
+/// This module is optimized for performance and provides a low-level, but safe,
+/// interface to VAES instructions via inline assembly.
 ///
-/// This module uses inline assembly to provide these functions on the stable Rust toolchain.
-/// The functions here are intended as low-level building blocks for creating
-/// higher-level AES cipher implementations.
+/// **Requires** CPU support for `vaes` and `avx` instructions, checked at runtime.
+/// **Warning:** Use at your own risk. Incorrect usage may lead to undefined behavior
+/// or process termination if CPU feature checks are bypassed.
 pub mod vaes {
     use core::{
         arch::{
             asm,
-            x86_64::{__m128i, __m256i, _mm_aesimc_si128, _mm256_loadu_si256, _mm256_storeu_si256},
+            x86_64::{
+                __m128i, __m256i, _mm_aesimc_si128, _mm256_aesdec_epi128, _mm256_aesdeclast_epi128,
+                _mm256_aesenc_epi128, _mm256_aesenclast_epi128, _mm256_loadu_si256,
+                _mm256_storeu_si256,
+            },
         },
         ops::Deref,
     };
-    use std::is_x86_feature_detected;
 
     #[cfg(feature = "dev-logs")]
     use log::warn;
@@ -523,21 +526,17 @@ pub mod vaes {
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
     #[target_feature(enable = "vaes,avx")]
-    pub unsafe fn vaesenc(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
-        if is_x86_feature_detected!("vaes") {
-            let mut result = data.0;
-            unsafe {
-                asm!(
-                    "vaesenc {0}, {0}, {1}",
-                    inout(ymm_reg) result,
-                    in(ymm_reg) round_key.0,
-                    options(nostack, nomem, preserves_flags)
-                );
-            }
-            __vaes256i(result)
-        } else {
-            panic!("THIS CPU DOES NOT SUPPORT VAES - FATAL ERROR")
+    pub unsafe fn vaesenc_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        let mut result = data.0;
+        unsafe {
+            asm!(
+                "vaesenc {0}, {0}, {1}",
+                inout(ymm_reg) result,
+                in(ymm_reg) round_key.0,
+                options(nostack, nomem, preserves_flags)
+            );
         }
+        __vaes256i(result)
     }
 
     /// Performs one intermediate round of AES decryption using the `vaesdec` instruction.
@@ -545,22 +544,18 @@ pub mod vaes {
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
     #[target_feature(enable = "vaes,avx")]
-    pub unsafe fn vaesdec(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
-        if is_x86_feature_detected!("vaes") {
-            let mut result = data.0;
+    pub unsafe fn vaesdec_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        let mut result = data.0;
 
-            unsafe {
-                asm!(
-                    "vaesdec {0}, {0}, {1}",
-                    inout(ymm_reg) result,
-                    in(ymm_reg) round_key.0,
-                    options(nostack, nomem, preserves_flags)
-                );
-            }
-            __vaes256i(result)
-        } else {
-            panic!("THIS CPU DOES NOT SUPPORT VAES - FATAL ERROR")
+        unsafe {
+            asm!(
+                "vaesdec {0}, {0}, {1}",
+                inout(ymm_reg) result,
+                in(ymm_reg) round_key.0,
+                options(nostack, nomem, preserves_flags)
+            );
         }
+        __vaes256i(result)
     }
 
     /// Performs the final round of AES encryption using the `vaesenclast` instruction.
@@ -568,21 +563,17 @@ pub mod vaes {
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
     #[target_feature(enable = "vaes,avx")]
-    pub unsafe fn vaesenc_last(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
-        if is_x86_feature_detected!("vaes") {
-            let mut result = data.0;
-            unsafe {
-                asm!(
-                    "vaesenclast {0}, {0}, {1}",
-                    inout(ymm_reg) result,
-                    in(ymm_reg) round_key.0,
-                    options(nostack, nomem, preserves_flags)
-                );
-            }
-            __vaes256i(result)
-        } else {
-            panic!("THIS CPU DOES NOT SUPPORT VAES - FATAL ERROR")
+    pub unsafe fn vaesenc_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        let mut result = data.0;
+        unsafe {
+            asm!(
+                "vaesenclast {0}, {0}, {1}",
+                inout(ymm_reg) result,
+                in(ymm_reg) round_key.0,
+                options(nostack, nomem, preserves_flags)
+            );
         }
+        __vaes256i(result)
     }
 
     /// Performs the final round of AES decryption using the `vaesdeclast` instruction.
@@ -590,20 +581,36 @@ pub mod vaes {
     /// # Panics
     /// Panics if the host CPU does not support the `vaes` instruction set.
     #[target_feature(enable = "vaes,avx")]
-    pub unsafe fn vaesdec_last(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
-        if is_x86_feature_detected!("vaes") {
-            let mut result = data.0;
-            unsafe {
-                asm!(
-                    "vaesdeclast {0}, {0}, {1}",
-                    inout(ymm_reg) result,
-                    in(ymm_reg) round_key.0,
-                    options(nostack, nomem, preserves_flags)
-                );
-            }
-            __vaes256i(result)
-        } else {
-            panic!("THIS CPU DOES NOT SUPPORT VAES - FATAL ERROR")
+    pub unsafe fn vaesdec_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        let mut result = data.0;
+        unsafe {
+            asm!(
+                "vaesdeclast {0}, {0}, {1}",
+                inout(ymm_reg) result,
+                in(ymm_reg) round_key.0,
+                options(nostack, nomem, preserves_flags)
+            );
         }
+        __vaes256i(result)
+    }
+
+    #[target_feature(enable = "vaes,avx")]
+    pub fn vaesenc_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        __vaes256i(_mm256_aesenc_epi128(data.0, round_key.0))
+    }
+
+    #[target_feature(enable = "vaes,avx")]
+    pub fn vaesdec_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        __vaes256i(_mm256_aesdec_epi128(data.0, round_key.0))
+    }
+
+    #[target_feature(enable = "vaes,avx")]
+    pub fn vaesenc_last_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        __vaes256i(_mm256_aesenclast_epi128(data.0, round_key.0))
+    }
+
+    #[target_feature(enable = "vaes,avx")]
+    pub fn vaesdec_last_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
+        __vaes256i(_mm256_aesdeclast_epi128(data.0, round_key.0))
     }
 }
