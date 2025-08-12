@@ -161,6 +161,7 @@ pub mod ciphers {
     /// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
     pub mod aes_cipher;
 
+    #[cfg(feature = "vaes")]
     /// THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
     pub mod vaes_cipher;
 }
@@ -1203,6 +1204,7 @@ macro_rules! types {
             $(#[$atr:meta])*
             type $name:ident: $size:tt x $type:ty;
             $(impl deref $struct:ident, $target:tt)?
+            $(impl drop $struct2:ident)?
         )*
     ) => (
         $(
@@ -1215,6 +1217,13 @@ macro_rules! types {
 
                     fn deref(&self) -> &Self::Target {
                         &self.0
+                    }
+                }
+            )?
+            $(
+                impl Drop for $struct2 {
+                    fn drop(&mut self) {
+                        self.0.zeroize();
                     }
                 }
             )?

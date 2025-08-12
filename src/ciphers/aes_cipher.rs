@@ -5,7 +5,7 @@ use core::{
 };
 
 use ghash::GHash;
-#[cfg(any(feature = "dev-logs", feature = "cipher_prefetch"))]
+#[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
 use log::trace;
 #[cfg(feature = "cipher_prefetch")]
 use log::warn;
@@ -256,7 +256,7 @@ impl Aes256CTR {
     fn encrypt_block(&self, plaintext: &[u8]) -> __m128i {
         let aes = AES_NI;
         let block = unsafe { plaintext.load() };
-        aes.perform_aes256_rounds_block(self.round_keys, block)
+        aes.perform_aes256_rounds_block(&self.round_keys, block)
     }
 
     pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
@@ -468,7 +468,7 @@ impl Aes256 {
     fn encrypt_block(&self, plaintext: &[u8]) -> __m128i {
         let aes = AES_NI;
         let block = unsafe { plaintext.load() };
-        aes.perform_aes256_rounds_block(self.round_keys, block)
+        aes.perform_aes256_rounds_block(&self.round_keys, block)
     }
 
     fn ctr_inplace(&self, src: &mut [u8], nonce: &Nonce96) -> Result<(), AesError> {

@@ -45,34 +45,37 @@ pub mod aesni {
 
     use log::trace;
 
-    use crate::types;
+    use crate::{memory_obfuscation::Zeroize, types};
 
     types! {
-        #[derive(Clone, Copy)]
+        #[derive(Clone)]
         /// A wrapper for AES-128 Round Keys, which is providing type-safe environment
         ///
         /// Can be loaded via `loadu_keys_128` function
         /// RSI = Rounded Structured Integers
         type __rsi128keys: 11 x __m128i;
         impl deref __rsi128keys, [__m128i; 11]
+        impl drop __rsi128keys
 
-        #[derive(Clone, Copy)]
+        #[derive(Clone)]
         /// A wrapper for AES-192 Round Keys, which is providing type-safe environment
         ///
         /// Can be loaded via `loadu_keys_192` function
         /// RSI = Rounded Structured Integers
         type __rsi192keys: 13 x __m128i;
         impl deref __rsi192keys, [__m128i; 13]
+        impl drop __rsi192keys
 
-        #[derive(Clone, Copy)]
+        #[derive(Clone)]
         /// A wrapper for AES-256 Round Keys, which is providing type-safe environment
         ///
         /// Can be loaded via `loadu_keys_256` function
         /// RSI = Rounded Structured Integers
         type __rsi256keys: 15 x __m128i;
         impl deref __rsi256keys, [__m128i; 15]
+        impl drop __rsi256keys
 
-        #[derive(Clone, Copy)]
+        #[derive(Clone)]
         /// A wrapper for AES-512 Round Keys, which is providing type-safe environment
         ///
         /// # THIS TYPE IS FOR FUTURE-PROOFING
@@ -81,6 +84,7 @@ pub mod aesni {
         /// RSI = Rounded Structured Integers
         type __rsi512keys: 23 x __m128i;
         impl deref __rsi512keys, [__m128i; 23]
+        impl drop __rsi512keys
     }
 
     /// This function loads your keys to `__rsi128keys` wrapper
@@ -149,7 +153,8 @@ pub mod aesni {
         fn aes_inv_last_round(&self, key: __m128i, chunk: __m128i) -> __m128i;
         fn aes_key_gen_assist<const RCON: i32>(&self, key: __m128i) -> __m128i;
         fn key_schedule_assist(&self, key: __m128i, temp: __m128i) -> __m128i;
-        fn perform_aes256_rounds_block(&self, round_keys: __rsi256keys, chunk: __m128i) -> __m128i;
+        fn perform_aes256_rounds_block(&self, round_keys: &__rsi256keys, chunk: __m128i)
+        -> __m128i;
         fn perform_aes256_inv_rounds_block(
             &self,
             round_keys: __rsi256keys,
@@ -198,7 +203,7 @@ pub mod aesni {
         #[inline(always)]
         fn perform_aes256_rounds_block(
             &self,
-            round_keys: __rsi256keys,
+            round_keys: &__rsi256keys,
             mut chunk: __m128i,
         ) -> __m128i {
             chunk = unsafe { _mm_xor_si128(chunk, round_keys[0]) };
