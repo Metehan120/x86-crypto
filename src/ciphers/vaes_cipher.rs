@@ -140,57 +140,47 @@ impl Vaes256CTR {
     }
 
     pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) {
-        let (n0, n1) = nonce.0.split_at(12);
+        let chunk_size = 32;
+        let main_len = plaintext.len() / chunk_size * chunk_size;
+        let (main, tail) = plaintext.split_at_mut(main_len);
 
-        let len = plaintext.len();
-        let (chunks, tail) = plaintext.as_mut().split_at_mut(len & !31);
-
-        chunks
-            .par_chunks_exact_mut(32)
+        main.par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
-                let ctr0 = i.wrapping_add(1);
-                let ctr1 = ctr0.wrapping_add(1);
-
                 let mut iv = [0u8; 32];
-                iv[0..12].copy_from_slice(n0);
-                iv[12..16].copy_from_slice(&(ctr0 as u32).to_be_bytes());
-                iv[16..28].copy_from_slice(n1);
-                iv[28..32].copy_from_slice(&(ctr1 as u32).to_be_bytes());
 
-                let ks = self
+                iv[..12].copy_from_slice(&nonce.0[..12]);
+                iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+
+                iv[16..28].copy_from_slice(&nonce.0[12..]);
+                iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+
+                let encrypted_iv = self
                     .encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
 
-                #[cfg(feature = "cipher_prefetch")]
-                unsafe {
-                    use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T0);
-                }
+                let chunk_reg = unsafe { _mm256_loadu_si256(chunk.as_ptr() as *const __m256i) };
+                let result = unsafe { _mm256_xor_si256(encrypted_iv.as_mm256i(), chunk_reg) };
 
-                let m = unsafe { _mm256_loadu_si256(chunk.as_ptr() as *const __m256i) };
-                let c = unsafe { _mm256_xor_si256(ks.as_mm256i(), m) };
-                unsafe { _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, c) };
+                unsafe { _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, result) };
             });
 
         if !tail.is_empty() {
-            let pairs = chunks.len() / 32;
-            let ctr0 = (2 * pairs as u64) + 2;
-            let ctr1 = ctr0 + 1;
-
+            let i = main.len() / chunk_size;
             let mut iv = [0u8; 32];
-            iv[0..12].copy_from_slice(n0);
-            iv[12..16].copy_from_slice(&(ctr0 as u32).to_be_bytes());
-            iv[16..28].copy_from_slice(n1);
-            iv[28..32].copy_from_slice(&(ctr1 as u32).to_be_bytes());
+            iv[..12].copy_from_slice(&nonce.0);
+            iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
 
-            let ks =
+            iv[16..28].copy_from_slice(&nonce.0);
+            iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+
+            let keystream =
                 self.encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
 
             let mut buf = [0u8; 32];
-            unsafe { _mm256_storeu_si256(buf.as_mut_ptr() as *mut __m256i, ks.as_mm256i()) };
-            for (b, k) in tail.iter_mut().zip(buf.iter()) {
-                *b ^= *k;
+            unsafe { _mm256_storeu_si256(buf.as_mut_ptr() as *mut __m256i, keystream.as_mm256i()) };
+
+            for j in 0..tail.len() {
+                tail[j] ^= buf[j];
             }
         }
     }
@@ -245,58 +235,48 @@ impl Vaes256 {
         block
     }
 
-    fn ctr(&self, plaintext: &mut [u8], nonce: Nonce192) {
-        let (n0, n1) = nonce.0.split_at(12);
+    fn ctr(&self, src: &mut [u8], nonce: Nonce192) {
+        let chunk_size = 32;
+        let main_len = src.len() / chunk_size * chunk_size;
+        let (main, tail) = src.split_at_mut(main_len);
 
-        let len = plaintext.len();
-        let (chunks, tail) = plaintext.as_mut().split_at_mut(len & !31);
-
-        chunks
-            .par_chunks_exact_mut(32)
+        main.par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
-                let ctr0 = i.wrapping_add(2);
-                let ctr1 = ctr0.wrapping_add(1);
-
                 let mut iv = [0u8; 32];
-                iv[0..12].copy_from_slice(n0);
-                iv[12..16].copy_from_slice(&(ctr0 as u32).to_be_bytes());
-                iv[16..28].copy_from_slice(n1);
-                iv[28..32].copy_from_slice(&(ctr1 as u32).to_be_bytes());
 
-                let ks = self
+                iv[..12].copy_from_slice(&nonce.0[..12]);
+                iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+
+                iv[16..28].copy_from_slice(&nonce.0[12..]);
+                iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+
+                let encrypted_iv = self
                     .encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
 
-                #[cfg(feature = "cipher_prefetch")]
-                unsafe {
-                    use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T0);
-                }
+                let chunk_reg = unsafe { _mm256_loadu_si256(chunk.as_ptr() as *const __m256i) };
+                let result = unsafe { _mm256_xor_si256(encrypted_iv.as_mm256i(), chunk_reg) };
 
-                let m = unsafe { _mm256_loadu_si256(chunk.as_ptr() as *const __m256i) };
-                let c = unsafe { _mm256_xor_si256(ks.as_mm256i(), m) };
-                unsafe { _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, c) };
+                unsafe { _mm256_storeu_si256(chunk.as_mut_ptr() as *mut __m256i, result) };
             });
 
         if !tail.is_empty() {
-            let pairs = chunks.len() / 32;
-            let ctr0 = (2 * pairs as u64) + 2;
-            let ctr1 = ctr0 + 1;
-
+            let i = main.len() / chunk_size;
             let mut iv = [0u8; 32];
-            iv[0..12].copy_from_slice(n0);
-            iv[12..16].copy_from_slice(&(ctr0 as u32).to_be_bytes());
-            iv[16..28].copy_from_slice(n1);
-            iv[28..32].copy_from_slice(&(ctr1 as u32).to_be_bytes());
+            iv[..12].copy_from_slice(&nonce.0);
+            iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
 
-            let ks =
+            iv[16..28].copy_from_slice(&nonce.0);
+            iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+
+            let keystream =
                 self.encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
 
             let mut buf = [0u8; 32];
-            unsafe { _mm256_storeu_si256(buf.as_mut_ptr() as *mut __m256i, ks.as_mm256i()) };
-            for (b, k) in tail.iter_mut().zip(buf.iter()) {
-                *b ^= *k;
+            unsafe { _mm256_storeu_si256(buf.as_mut_ptr() as *mut __m256i, keystream.as_mm256i()) };
+
+            for j in 0..tail.len() {
+                tail[j] ^= buf[j];
             }
         }
     }
@@ -363,19 +343,28 @@ impl Vaes256 {
 
 #[cfg(test)]
 mod tests {
-    use crate::HardwareRNG;
+    use crate::{
+        HardwareRNG,
+        ciphers::aes_cipher::{Aes256, Nonce96, Tag128},
+    };
 
     use super::*;
 
     #[test]
     fn test_encrypt() {
         let key = [1u8; 32];
-        let cipher = Vaes256CTR::new(&key);
+        let cipher = Vaes256::new(&key);
+        let aes = Aes256::new(&key).unwrap();
         let nonce = Nonce192::generate_nonce(&mut HardwareRNG);
-        let mut plaintext = vec![0u8; 1024 * 1024 * 1024];
-        let tag = cipher.encrypt(&mut plaintext, nonce);
-        cipher.decrypt(&mut plaintext, nonce);
+        let mut bytes = [0u8; 12];
+        bytes.copy_from_slice(&nonce.0[..12]);
 
-        println!("Tag: {:?}", tag);
+        let nonce2 = Nonce96::from_bytes(bytes);
+        let mut plaintext = vec![0u8; 128];
+        let tag = cipher.encrypt(&mut plaintext, nonce);
+        aes.decrypt_inplace_with_tag(&mut plaintext, nonce2, Tag128::from_array(tag))
+            .unwrap();
+
+        println!("{:?}", plaintext)
     }
 }
