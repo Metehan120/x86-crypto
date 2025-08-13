@@ -1,8 +1,8 @@
 [build]
 rustflags = [
     "-C", "target-feature=+sse,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2",
-    "-C", "target-feature=+popcnt,+fma,+avx,+avx2,+f16c",
+    "-C", "target-feature=+popcnt,+fma,+avx,+avx2",
     "-C", "target-feature=+bmi1,+bmi2,+lzcnt",
-    "-C", "target-feature=+aes,+pclmulqdq,+vaes,+vpclmulqdq",
-    "-C", "target-feature=+rdseed,+sha"
+    "-C", "target-feature=+aes,+pclmulqdq",
+    "-C", "target-feature=+rdrand"
 ]
