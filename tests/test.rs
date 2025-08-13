@@ -1,7 +1,13 @@
 pub use x86_crypto::*;
 use x86_crypto::{
-    ciphers::aes_cipher::{Aes256, Nonce96},
-    memory::{securevec::SecureVec, zeroize::Zeroizeable},
+    ciphers::{
+        aes_cipher::{Aes256, Aes256CTR, Nonce96},
+        vaes_cipher::{Nonce192, Vaes256CTR},
+    },
+    memory::{
+        securevec::SecureVec,
+        zeroize::{SimdZeroize, Zeroizeable},
+    },
     rng::{HWChaCha20Rng, HardwareRNG},
 };
 
@@ -9,21 +15,29 @@ use x86_crypto::{
 fn general() {
     env_logger::init();
 
-    let mut data = vec![0u8; 256];
+    let mut data = vec![1u8; 256];
     let mut key: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
     key.fill_random(&mut HWChaCha20Rng::new().unwrap()).unwrap();
     let mut key2 = SecureVec::with_capacity(32).unwrap();
     key2.fill(0).unwrap();
     key2.copy_from_slice(&key);
 
-    let test = Aes256::new(&key).unwrap();
+    let test = Aes256CTR::new(&key).unwrap();
     let nonce = Nonce96::generate_nonce(&mut HardwareRNG);
     let mut output = test.encrypt(&data, nonce).unwrap();
 
-    key.zeroize();
+    let ctr = Vaes256CTR::new(&key);
+    let mut nonce2 = [0u8; 24];
+    nonce2[..12].copy_from_slice(nonce.as_slice());
+    nonce2[12..].copy_from_slice(nonce.as_slice());
+    let nonce = Nonce192::from_bytes(nonce2);
 
+    ctr.decrypt(&mut output, nonce);
+    println!("{:?}", output);
+
+    key.zeroize();
     data.zeroize();
-    output.zeroize();
+    output.par_zeroize();
 
     println!("{:?}", output)
 }

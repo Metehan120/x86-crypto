@@ -31,6 +31,8 @@ static NONCE_TOKEN: AtomicU64 = AtomicU64::new(0);
 #[deprecated(since = "0.2.0", note = "Use [`Nonce96`] instead")]
 /// Will be removed in 0.3.0
 pub struct Nonce([u8; 12]);
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct Nonce96(pub [u8; 12]);
 
 macro_rules! impl_nonce {

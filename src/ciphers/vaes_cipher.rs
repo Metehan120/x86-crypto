@@ -101,7 +101,7 @@ pub struct Vaes256CTR {
 }
 
 impl Vaes256CTR {
-    pub fn new(key: &[u8; 32]) -> Self {
+    pub fn new(key: &[u8]) -> Self {
         #[cfg(feature = "dev-logs")]
         debug!("Created new AES-256 cipher instance");
 
@@ -118,6 +118,7 @@ impl Vaes256CTR {
         Self { key: rk256 }
     }
 
+    #[inline(always)]
     fn encrypt_block(&self, mut plaintext: __m256i) -> __vaes256i {
         plaintext = unsafe { _mm256_xor_si256(plaintext, self.key[0]) };
         let mut block = loadu_vaes256_mm256i(plaintext);
@@ -155,10 +156,10 @@ impl Vaes256CTR {
                 let mut iv = [0u8; 32];
 
                 iv[..12].copy_from_slice(&nonce.0[..12]);
-                iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+                iv[12..16].copy_from_slice(&(i as u32 * 2 + 1).to_be_bytes());
 
                 iv[16..28].copy_from_slice(&nonce.0[12..]);
-                iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+                iv[28..32].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
 
                 let encrypted_iv = self
                     .encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
@@ -186,10 +187,10 @@ impl Vaes256CTR {
             let i = main.len() / chunk_size;
             let mut iv = [0u8; 32];
             iv[..12].copy_from_slice(&nonce.0[12..]);
-            iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+            iv[12..16].copy_from_slice(&(i as u32 * 2 + 1).to_be_bytes());
 
             iv[16..28].copy_from_slice(&nonce.0[..12]);
-            iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+            iv[28..32].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
 
             let keystream =
                 self.encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
@@ -246,6 +247,7 @@ impl Vaes256 {
         Self { key: rk256 }
     }
 
+    #[inline(always)]
     fn encrypt_block(&self, mut plaintext: __m256i) -> __vaes256i {
         plaintext = unsafe { _mm256_xor_si256(plaintext, self.key[0]) };
         let mut block = loadu_vaes256_mm256i(plaintext);
