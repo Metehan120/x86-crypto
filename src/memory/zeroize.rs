@@ -9,10 +9,6 @@ use core::{
 
 use crate::{
     CryptoRNG, RngErrors,
-    ni_instructions::{
-        aesni::{__rsi128keys, __rsi192keys, __rsi256keys, __rsi512keys},
-        vaes::{__vaes256i, __vaes256key, __vaes256keys, __vaes512keys},
-    },
     rng::{HWChaCha20Rng, HardwareRandomizable},
 };
 
@@ -71,9 +67,9 @@ macro_rules! simdzeroize {
     };
 }
 
-zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
+zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d f64 f32 }
 randzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 }
-simdzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
+simdzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d f64 f32 }
 
 #[inline(never)]
 pub fn zeroize_func<T>(data: &mut [T]) {
