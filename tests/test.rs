@@ -1,9 +1,8 @@
 pub use x86_crypto::*;
 use x86_crypto::{
     ciphers::aes_cipher::{Aes256, Nonce96},
-    hw_chacha::HWChaCha20Rng,
-    memory::securevec::SecureVec,
-    memory::zeroize::Zeroizeable,
+    memory::{securevec::SecureVec, zeroize::Zeroizeable},
+    rng::{HWChaCha20Rng, HardwareRNG},
 };
 
 #[test]

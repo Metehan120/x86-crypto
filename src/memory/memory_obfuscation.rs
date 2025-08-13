@@ -1,7 +1,7 @@
 #[cfg(feature = "dev-logs")]
 use log::trace;
 
-use crate::{CryptoRNG, HardwareRNG};
+use crate::{CryptoRNG, rng::HardwareRNG};
 
 /// XOR-based memory scrambler for runtime data protection.
 ///

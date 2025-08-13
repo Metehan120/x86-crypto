@@ -13,7 +13,7 @@ use rustls::{
 
 use crate::{
     ciphers::aes_cipher::{Aes256, AesError, Nonce},
-    memory_obfuscation::Zeroize,
+    memory::zeroize::Zeroizeable,
 };
 
 pub struct AesGcmMessageHandler {

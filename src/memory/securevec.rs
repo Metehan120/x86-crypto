@@ -13,8 +13,8 @@ use log::{info, trace};
 use num_traits::Zero;
 
 use crate::{
-    CryptoRNG, HardwareRandomizable,
     memory::allocator::{AllocatorError, SECURE_ALLOC, SecureAllocErrorCode},
+    rng::{CryptoRNG, HardwareRandomizable},
 };
 
 /// High-performance secure memory container with automatic zeroization and constant time operations

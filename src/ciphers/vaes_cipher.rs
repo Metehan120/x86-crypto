@@ -24,6 +24,7 @@ use core::{
     sync::atomic::AtomicU64,
 };
 use ghash::GHash;
+#[cfg(feature = "cipher_prefetch")]
 use log::warn;
 use rayon::{
     iter::{IndexedParallelIterator, ParallelIterator},
@@ -395,8 +396,8 @@ impl Vaes256 {
 #[test]
 fn test_vaes_encrypt_aesgcm_decrypt() {
     use crate::{
-        HardwareRNG,
         ciphers::vaes_cipher::{Nonce192, Vaes256},
+        rng::HardwareRNG,
     };
     use aes_gcm::{
         Aes256Gcm,

@@ -1,14 +1,16 @@
 use core::{
     arch::x86_64::{__m128, __m128d, __m128i, __m256, __m256d, __m256i},
+    hint::black_box,
     ptr::write_bytes,
 };
 
 use crate::{
-    CryptoRNG, HardwareRNG, RngErrors,
+    CryptoRNG, RngErrors,
     ni_instructions::{
         aesni::{__rsi128keys, __rsi192keys, __rsi256keys, __rsi512keys},
         vaes::{__vaes256i, __vaes256key, __vaes256keys, __vaes512keys},
     },
+    rng::HardwareRNG,
 };
 
 /// Random-fill-then-zero memory clearing trait.
@@ -28,7 +30,7 @@ macro_rules! randzeroize {
                 HardwareRNG.try_fill_by(self)?;
 
                 unsafe {
-                    write_bytes(self.as_mut_ptr(), 0, self.len());
+                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
                 }
 
                 #[cfg(feature = "dev-logs")]
@@ -40,7 +42,7 @@ macro_rules! randzeroize {
                 HardwareRNG.fill_by_unchecked(self);
 
                 unsafe {
-                    write_bytes(self.as_mut_ptr(), 0, self.len());
+                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
                 }
 
                 #[cfg(feature = "dev-logs")]
@@ -59,7 +61,7 @@ macro_rules! zeroize {
         $(impl Zeroizeable for [$type] {
             fn zeroize(&mut self) {
                 unsafe {
-                    write_bytes(self.as_mut_ptr(), 0, self.len());
+                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
                 }
 
                 #[cfg(feature = "dev-logs")]
@@ -70,4 +72,4 @@ macro_rules! zeroize {
 }
 
 zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 String __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
-randzeroize!(usize u8 u16 u32 u64 i8 i16 i32 i64);
+randzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 }
