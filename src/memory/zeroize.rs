@@ -1,10 +1,10 @@
 use core::{
     arch::x86_64::{
-        __m128, __m128d, __m128i, __m256, __m256d, __m256i, _mm_setzero_si128, _mm_storeu_si128,
-        _mm256_setzero_si256, _mm256_storeu_si256,
+        __m128, __m128d, __m128i, __m256, __m256d, __m256i, _mm_setzero_si128, _mm_sfence,
+        _mm_storeu_si128, _mm256_setzero_si256, _mm256_storeu_si256,
     },
     hint::black_box,
-    ptr::write_bytes,
+    sync::atomic::{Ordering, compiler_fence},
 };
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
         aesni::{__rsi128keys, __rsi192keys, __rsi256keys, __rsi512keys},
         vaes::{__vaes256i, __vaes256key, __vaes256keys, __vaes512keys},
     },
-    rng::{HardwareRNG, HardwareRandomizable},
+    rng::{HWChaCha20Rng, HardwareRandomizable},
 };
 
 /// Random-fill-then-zero memory clearing trait.
@@ -71,44 +71,64 @@ macro_rules! simdzeroize {
     };
 }
 
-zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 String __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
+zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
 randzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 }
-simdzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 String __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
+simdzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
 
+#[inline(never)]
 pub fn zeroize_func<T>(data: &mut [T]) {
     unsafe {
-        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+        let ptr = data.as_mut_ptr();
+        for i in black_box(0..data.len()) {
+            core::ptr::write_volatile(ptr.add(i), core::mem::zeroed());
+        }
+        compiler_fence(Ordering::SeqCst);
+        _mm_sfence();
     }
-
-    #[cfg(feature = "dev-logs")]
-    trace!("Zeroized memory with random prefill");
 }
 
+#[inline(never)]
 pub fn rand_zeroize_func<T: HardwareRandomizable>(data: &mut [T]) -> Result<(), RngErrors> {
-    HardwareRNG.try_fill_by(data)?;
+    let mut chacha = HWChaCha20Rng::new()?;
+    chacha.fill_by_unchecked(data);
 
     unsafe {
-        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+        let ptr = data.as_mut_ptr();
+        for i in black_box(0..data.len()) {
+            core::ptr::write_volatile(ptr.add(i), core::mem::zeroed());
+        }
+        compiler_fence(Ordering::SeqCst);
+        _mm_sfence();
     }
-
-    #[cfg(feature = "dev-logs")]
-    trace!("Zeroized memory with random prefill");
 
     Ok(())
 }
 
+#[inline(never)]
 pub fn rand_zeroize_unchecked_func<T: HardwareRandomizable>(data: &mut [T]) {
-    HardwareRNG.fill_by_unchecked(data);
+    let mut chacha = HWChaCha20Rng::new().expect("Failed to create ChaCha instance");
+    chacha.fill_by_unchecked(data);
 
     unsafe {
-        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+        let ptr = data.as_mut_ptr();
+        for i in black_box(0..data.len()) {
+            core::ptr::write_volatile(ptr.add(i), core::mem::zeroed());
+        }
+        compiler_fence(Ordering::SeqCst);
+        _mm_sfence();
     }
-
-    #[cfg(feature = "dev-logs")]
-    trace!("Zeroized memory with random prefill");
 }
 
-#[target_feature(enable = "avx2,avx")]
+fn volatile_touch<T>(data: &mut [T]) {
+    let ptr = data.as_mut_ptr();
+    if !data.is_empty() {
+        for i in black_box(0..data.len()) {
+            unsafe { core::ptr::write_volatile(ptr.add(i), core::mem::zeroed()) };
+        }
+    }
+}
+
+#[target_feature(enable = "avx2")]
 pub fn avx2_zeroize<T>(data: &mut [T]) {
     let elem_size = core::mem::size_of::<T>();
     let chunk_size = 160 / core::mem::size_of::<T>();
@@ -140,7 +160,8 @@ pub fn avx2_zeroize<T>(data: &mut [T]) {
             );
         }
 
-        black_box(write_bytes(tail.as_mut_ptr(), 0, tail.len()));
+        volatile_touch(tail);
+        _mm_sfence();
     }
 }
 
@@ -176,6 +197,7 @@ pub fn avx_zeroize<T>(data: &mut [T]) {
             );
         }
 
-        black_box(write_bytes(tail.as_mut_ptr(), 0, tail.len()));
+        volatile_touch(tail);
+        _mm_sfence();
     }
 }
