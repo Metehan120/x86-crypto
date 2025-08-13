@@ -39,6 +39,7 @@ pub trait RawGenerator {
     where
         T: HardwareRandomizable;
 
+    #[must_use = "Check the error; RNG may fail on unsupported HW."]
     fn try_fill_raw_by<T>(&self, buffer: &mut [T]) -> Result<(), RngErrors>
     where
         T: HardwareRandomizable,
@@ -49,6 +50,7 @@ pub trait RawGenerator {
         Ok(())
     }
 
+    #[must_use = "Check the error; RNG may fail on unsupported HW."]
     fn fill_raw_by_unchecked<T>(&self, buffer: &mut [T])
     where
         T: HardwareRandomizable,

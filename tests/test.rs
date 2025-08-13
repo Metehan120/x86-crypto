@@ -24,6 +24,8 @@ fn general() {
 
     data.zeroize();
     output.zeroize();
+
+    println!("{:?}", output)
 }
 
 use aes_gcm::{

@@ -10,7 +10,7 @@ use crate::{
         aesni::{__rsi128keys, __rsi192keys, __rsi256keys, __rsi512keys},
         vaes::{__vaes256i, __vaes256key, __vaes256keys, __vaes512keys},
     },
-    rng::HardwareRNG,
+    rng::{HardwareRNG, HardwareRandomizable},
 };
 
 /// Random-fill-then-zero memory clearing trait.
@@ -27,26 +27,10 @@ macro_rules! randzeroize {
         $(impl RandZeroizeable for [$type] {
             #[inline(always)]
             fn rand_zeroize(&mut self) -> Result<(), RngErrors> {
-                HardwareRNG.try_fill_by(self)?;
-
-                unsafe {
-                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
-                }
-
-                #[cfg(feature = "dev-logs")]
-                trace!("Zeroized memory with random prefill");
-
-                Ok(())
+                rand_zeroize_func(self)
             }
             fn rand_zeroize_unchecked(&mut self) {
-                HardwareRNG.fill_by_unchecked(self);
-
-                unsafe {
-                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
-                }
-
-                #[cfg(feature = "dev-logs")]
-                trace!("Zeroized memory with random prefill");
+                rand_zeroize_unchecked_func(self)
             }
         })*
     };
@@ -60,12 +44,7 @@ macro_rules! zeroize {
     ($($type:ty)*) => {
         $(impl Zeroizeable for [$type] {
             fn zeroize(&mut self) {
-                unsafe {
-                    black_box(write_bytes(self.as_mut_ptr(), 0, self.len()));
-                }
-
-                #[cfg(feature = "dev-logs")]
-                trace!("Zeroized memory with random prefill");
+                zeroize_func(self)
             }
         })*
     };
@@ -73,3 +52,36 @@ macro_rules! zeroize {
 
 zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 String __m128i __m256i __m128 __m256 __m128d __m256d __vaes256i __vaes256key __vaes256keys __vaes512keys __rsi128keys __rsi192keys __rsi256keys __rsi512keys f64 f32 }
 randzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 }
+
+pub fn zeroize_func<T>(data: &mut [T]) {
+    unsafe {
+        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+    }
+
+    #[cfg(feature = "dev-logs")]
+    trace!("Zeroized memory with random prefill");
+}
+
+pub fn rand_zeroize_func<T: HardwareRandomizable>(data: &mut [T]) -> Result<(), RngErrors> {
+    HardwareRNG.try_fill_by(data)?;
+
+    unsafe {
+        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+    }
+
+    #[cfg(feature = "dev-logs")]
+    trace!("Zeroized memory with random prefill");
+
+    Ok(())
+}
+
+pub fn rand_zeroize_unchecked_func<T: HardwareRandomizable>(data: &mut [T]) {
+    HardwareRNG.fill_by_unchecked(data);
+
+    unsafe {
+        black_box(write_bytes(data.as_mut_ptr(), 0, data.len()));
+    }
+
+    #[cfg(feature = "dev-logs")]
+    trace!("Zeroized memory with random prefill");
+}
