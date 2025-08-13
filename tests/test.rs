@@ -1,10 +1,33 @@
+use std::hint::black_box;
+
 pub use x86_crypto::*;
 use x86_crypto::{
-    allocator::SecureVec,
-    ciphers::aes_cipher::{Aes256, Nonce96},
+    ciphers::{
+        aes_cipher::{Aes256, Nonce96},
+        vaes_cipher::{Nonce192, Vaes256},
+    },
     hw_chacha::HWChaCha20Rng,
-    memory_obfuscation::Zeroize,
+    memory::securevec::SecureVec,
+    memory::zeroize::Zeroizeable,
 };
+
+#[test]
+fn memory_stress_test() {
+    for _ in black_box(0..1024 * 1024) {
+        for _ in black_box(0..6) {
+            let mut data = vec![0u8; 1024 * 1024 * 1024 * 2];
+            let original = vec![0u8; 1024 * 1024 * 1024 * 2];
+
+            let vaes = Vaes256::new(&[0u8; 32]);
+            let nonce = Nonce192::generate_nonce(&mut HWChaCha20Rng::new().unwrap());
+            let tag = vaes.encrypt(&mut data, nonce);
+            vaes.decrypt(&mut data, nonce, &tag).unwrap();
+            if data != original {
+                panic!("Data mismatch after encryption/decryption");
+            }
+        }
+    }
+}
 
 #[test]
 fn general() {

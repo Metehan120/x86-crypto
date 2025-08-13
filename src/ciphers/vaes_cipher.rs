@@ -2,10 +2,9 @@ use crate::{
     CryptoRNG,
     ciphers::aes_cipher::{AesError, Tag128},
     constant_time_ops,
-    memory_obfuscation::Zeroize,
+    memory::zeroize::Zeroizeable,
     ni_instructions::{
-        LoadRegister,
-        aesni::{AES, AES_NI, storeu_keys_256},
+        aesni::{AES, AES_NI, LoadRegister, storeu_keys_256},
         vaes::{__vaes256i, loadu_vaes256_mm256i, loadu_vaeskey_m256i},
     },
     types,

@@ -21,32 +21,39 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore};
 use thiserror_no_std::Error;
 
-use crate::allocator::{AllocatorError, SecureVec};
+use crate::memory::allocator::AllocatorError;
+use crate::memory::securevec::SecureVec;
 
 #[cfg(target_os = "linux")]
 #[cfg(feature = "std")]
 #[cfg(feature = "secure_memory")]
-/// Secure memory allocator for Linux systems that prevents sensitive data from being swapped to disk.
-///
-/// This module provides `SecureVec<T>`, a specialized container that uses `mlock()` to pin memory
-/// and automatically zeros content on drop. Ideal for storing cryptographic keys, passwords, and
-/// other sensitive data that should never touch the disk.
-///
-/// # Features
-/// - Memory locking with `mlock2()`/`mlock()` fallback
-/// - Automatic zeroization on drop
-/// - Cache-aligned (64-byte) allocation
-/// - Fixed capacity to prevent reallocation
-/// - Constant time comparison
-/// - Highly secure Error Handling
-///
-/// # Example
-/// ```rust
-/// let mut secure_data = SecureVec::with_capacity(32)?;
-/// secure_data.extend_from_slice(&encryption_key)?;
-/// // Memory automatically secured and cleaned up
-/// ```
-pub mod allocator;
+pub mod memory {
+    pub mod allocator;
+    pub mod memory_obfuscation;
+    /// Secure memory allocator for Linux systems that prevents sensitive data from being swapped to disk.
+    ///
+    /// This module provides `SecureVec<T>`, a specialized container that uses `mlock()` to pin memory
+    /// and automatically zeros content on drop. Ideal for storing cryptographic keys, passwords, and
+    /// other sensitive data that should never touch the disk.
+    ///
+    /// # Features
+    /// - Memory locking with `mlock2()`/`mlock()` fallback
+    /// - Automatic zeroization on drop
+    /// - Cache-aligned (64-byte) allocation
+    /// - Fixed capacity to prevent reallocation
+    /// - Constant time comparison
+    /// - Highly secure Error Handling
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut secure_data = SecureVec::with_capacity(32)?;
+    /// secure_data.extend_from_slice(&encryption_key)?;
+    /// // Memory automatically secured and cleaned up
+    /// ```
+    pub mod securevec;
+    pub mod securevec_traits;
+    pub mod zeroize;
+}
 
 /// Low-level cache manipulation operations for timing analysis and performance optimization.
 ///
@@ -100,7 +107,12 @@ pub mod hw_chacha;
 /// let encrypted = AesNI.aes_round(key_reg, data_reg);
 /// let result: [u8; 16] = encrypted.store();
 /// ```
-pub mod ni_instructions;
+pub mod ni_instructions {
+    pub mod aesni;
+    pub mod pcmul;
+    pub mod shani;
+    pub mod vaes;
+}
 
 /// SIMD-accelerated operations using AVX2 for high-performance parallel computing.
 ///
@@ -882,109 +894,6 @@ pub mod timing_safe {
     pub fn secure_sleep_jitter() {
         let jitter: u32 = HardwareRNG.try_generate().unwrap_or(100) % 1000;
         std::thread::sleep(std::time::Duration::from_micros(jitter as u64));
-    }
-}
-
-/// Memory obfuscation and secure cleanup utilities.
-///
-/// Provides tools for scrambling sensitive data in memory and ensuring
-/// secure deletion that resists memory forensics and cold boot attacks.
-pub mod memory_obfuscation {
-    use core::ptr::write_bytes;
-
-    #[cfg(feature = "dev-logs")]
-    use log::trace;
-
-    use crate::{CryptoRNG, HardwareRNG, RngErrors};
-
-    /// XOR-based memory scrambler for runtime data protection.
-    ///
-    /// # DOES NOT PROVIDE ANY SECURITY
-    /// # USE IT AT YOUR OWN RISK
-    ///
-    /// Obfuscates sensitive data in memory using hardware-generated XOR keys.
-    /// Protects against memory dumps and reduces plaintext exposure time.
-    pub struct MemoryScrambler {
-        xor_key: [u8; 64],
-    }
-
-    impl MemoryScrambler {
-        #[inline(always)]
-        /// Creates new scrambler with hardware-generated XOR key.
-        pub fn new() -> Result<Self, crate::RngErrors> {
-            let mut key = [0u8; 64];
-            HardwareRNG.try_fill_by(&mut key)?;
-            Ok(Self { xor_key: key })
-        }
-
-        #[inline(always)]
-        /// XOR-scrambles data in place using internal key.
-        pub fn scramble(&self, data: &mut [u8]) {
-            for (i, byte) in data.iter_mut().enumerate() {
-                *byte ^= self.xor_key[i % 64];
-            }
-        }
-
-        #[inline(always)]
-        /// Descrambles data (same as scramble due to XOR properties).
-        pub fn descramble(&self, data: &mut [u8]) {
-            self.scramble(data);
-        }
-    }
-
-    /// Secure memory clearing trait.
-    ///
-    /// Provides guaranteed zeroing that compilers cannot optimize away.
-    pub trait Zeroize {
-        fn zeroize(&mut self);
-    }
-
-    /// Random-fill-then-zero memory clearing trait.
-    ///
-    /// Overwrites memory with random data before zeroing to resist
-    /// forensic recovery and cold boot attacks.
-    pub trait RandZeroize {
-        fn rand_zeroize(&mut self) -> Result<(), RngErrors>;
-        fn rand_zeroize_unchecked(&mut self) -> ();
-    }
-
-    impl RandZeroize for [u8] {
-        #[inline(always)]
-        fn rand_zeroize(&mut self) -> Result<(), RngErrors> {
-            HardwareRNG.try_fill_by(self)?;
-
-            unsafe {
-                write_bytes(self.as_mut_ptr(), 0, self.len());
-            }
-
-            #[cfg(feature = "dev-logs")]
-            trace!("Zeroized memory with random prefill");
-
-            Ok(())
-        }
-
-        fn rand_zeroize_unchecked(&mut self) {
-            HardwareRNG.fill_by_unchecked(self);
-
-            unsafe {
-                write_bytes(self.as_mut_ptr(), 0, self.len());
-            }
-
-            #[cfg(feature = "dev-logs")]
-            trace!("Zeroized memory with random prefill");
-        }
-    }
-
-    impl<T> Zeroize for [T] {
-        #[inline(always)]
-        fn zeroize(&mut self) {
-            unsafe {
-                write_bytes(self.as_mut_ptr(), 0, self.len());
-            }
-
-            #[cfg(feature = "dev-logs")]
-            trace!("Zeroized memory (generic)");
-        }
     }
 }
 

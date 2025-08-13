@@ -6,12 +6,13 @@
 
 ## Features
 
-* **AES-CTR / AES-GCM** with AES-NI / VAES acceleration
-* **GHASH** using PCLMULQDQ
-* **ChaCha20** (hardware-assisted RNG integration)
-* **SecureVec**: mlock-based, zeroing, capacity-checked secure allocator
-* **Hardware RNG**: RDRAND, RDSEED support
-* **TLS Handler** with rustls integration
+* **AES-CTR / AES-GCM** with AES-NI acceleration
+* **VAES-GCM** (parallelized 2× block CTR + GHASH) for VAES-capable CPUs
+* **GHASH** accelerated with PCLMULQDQ
+* **ChaCha20** with hardware RNG seeding
+* **SecureVec**: `mlock`-based, zeroing, capacity-checked secure allocator
+* **Hardware RNG**: RDRAND and RDSEED support
+* **TLS Handler** integration with `rustls`
 * **Constant-time comparisons** and side-channel resistance
 * **Cache control utilities** for security-sensitive operations
 * **Feature-gated modular design** — include only what you need
@@ -44,22 +45,20 @@ x86-crypto = { git = "https://github.com/Metehan120/x86-crypto" }
 ## Example Usage
 
 ```rust
-use x86_crypto::aes_cipher::Aes256Ctr;
-use x86_crypto::HardwareRandomizable;
+use x86_crypto::ciphers::vaes_cipher::{Vaes256, Nonce128};
+use x86_crypto::{HardwareRNG, HardwareRandomizable};
 
 fn main() {
-    // Generate a random key and nonce
     let key = x86_crypto::rand_key::<32>();
-    let nonce = x86_crypto::rand_key::<16>();
+    let nonce = Nonce128::generate_nonce(&mut HardwareRNG);
 
-    let cipher = Aes256Ctr::new(&key, &nonce);
-    let plaintext = b"Hello, world!";
-    let ciphertext = cipher.encrypt(plaintext);
+    let mut data = b"Hello, world!".to_vec();
+    let cipher = Vaes256::new(&key);
+    cipher.encrypt(&mut data, nonce);
 
-    println!("Ciphertext: {:x?}", ciphertext);
+    println!("Ciphertext: {:x?}", data);
 }
 ```
-
 ---
 
 ## Cargo Features
@@ -82,7 +81,7 @@ fn main() {
 * All AES operations are constant-time by design (hardware instructions)
 * Secure memory allocator uses `mlock` and zeroization
 * GHASH implementation is provided by the `ghash` crate — any security issues in GHASH are outside the scope of this library
-* Includes RFC and NIST test vectors for verification
+* Verified against RFC and NIST test vectors, plus AES-GCM ↔ VAES-GCM cross-tests
 
 **Disclaimer:** While this library follows best practices and passes standard test vectors, it has **not** undergone a formal third-party audit (e.g., NCC Group). Use at your own risk — the author accepts no responsibility for any outcome.
 

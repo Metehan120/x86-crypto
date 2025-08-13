@@ -19,11 +19,8 @@ use universal_hash::{Key, KeyInit, UniversalHash};
 
 use crate::{
     CryptoRNG, constant_time_ops,
-    memory_obfuscation::Zeroize,
-    ni_instructions::{
-        LoadRegister, StoreRegister,
-        aesni::{__rsi256keys, AES, AES_NI},
-    },
+    memory::zeroize::Zeroizeable,
+    ni_instructions::aesni::{__rsi256keys, AES, AES_NI, LoadRegister, StoreRegister},
     types,
 };
 
@@ -571,7 +568,7 @@ impl Aes256 {
         nonce: Nonce96,
         aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
-        use crate::memory_obfuscation::Zeroize;
+        use crate::memory::zeroize::Zeroizeable;
 
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM encryption");
@@ -622,7 +619,7 @@ impl Aes256 {
         nonce: Nonce96,
         aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
-        use crate::memory_obfuscation::Zeroize;
+        use crate::memory::zeroize::Zeroizeable;
 
         let data = src.as_ref();
         if data.len() < 16 {
@@ -637,6 +634,8 @@ impl Aes256 {
 
         let mut computed_tag = self.compute_tag(aad, nonce.0, &ciphertext);
         if constant_time_ops::compare_bytes(&received_tag, &computed_tag) == 0 {
+            use crate::memory::zeroize::Zeroizeable;
+
             #[cfg(feature = "dev-logs")]
             debug!("Expected tag: {:02x?}", computed_tag);
             #[cfg(feature = "dev-logs")]
