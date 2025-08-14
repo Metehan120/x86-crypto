@@ -1,10 +1,11 @@
 use core::{
     alloc::{GlobalAlloc, Layout},
+    ffi::c_void,
     fmt::{self, Display},
 };
 use std::alloc::System;
 
-use libc::{mlock, mlock2, munlock};
+use libc::{explicit_bzero, mlock, mlock2, munlock};
 use thiserror_no_std::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +157,7 @@ unsafe impl GlobalAlloc for SecureAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe {
             if !ptr.is_null() {
-                std::ptr::write_bytes(ptr, 0, layout.size());
+                explicit_bzero(ptr as *mut c_void, layout.size());
                 munlock(ptr as *mut libc::c_void, layout.size());
                 System.dealloc(ptr, layout);
             }
