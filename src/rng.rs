@@ -156,6 +156,39 @@ pub trait CryptoRNG {
             data.swap(i, j);
         }
     }
+
+    #[inline(always)]
+    fn try_shuffle_slice<T>(&mut self, data: &mut [T]) -> Result<(), RngErrors> {
+        for i in (1..data.len()).rev() {
+            let j: usize = self.try_generate_range(0..=i)?;
+            data.swap(i, j);
+        }
+
+        Ok(())
+    }
+}
+
+pub trait ShuffleSlice<R: CryptoRNG> {
+    fn shuffle(&mut self, rng: &mut R);
+    fn try_shuffle(&mut self, rng: &mut R) -> Result<(), RngErrors>;
+}
+
+impl<T, R: CryptoRNG> ShuffleSlice<R> for [T] {
+    fn shuffle(&mut self, rng: &mut R) {
+        for i in (1..self.len()).rev() {
+            let j: usize = rng.generate_range_unchecked(0..=i);
+            self.swap(i, j);
+        }
+    }
+
+    fn try_shuffle(&mut self, rng: &mut R) -> Result<(), RngErrors> {
+        for i in (1..self.len()).rev() {
+            let j: usize = rng.try_generate_range(0..=i)?;
+            self.swap(i, j);
+        }
+
+        Ok(())
+    }
 }
 
 /// Types that can be generated from hardware random number sources.
