@@ -16,19 +16,22 @@ pub fn disable_dump() -> u8 {
 
 #[cfg(target_os = "linux")]
 pub fn disable_ptrace() -> u8 {
-    use libc::prctl;
+    use libc::{PR_SET_DUMPABLE, PR_SET_PTRACER, prctl};
     use log::{error, info};
     use std::io;
 
-    if unsafe {
-        use libc::PR_SET_PTRACER;
-        prctl(PR_SET_PTRACER, -1, 0, 0, 0)
-    } != 0
-    {
-        error!("Failed to disable ptrace: {}", io::Error::last_os_error());
+    let r1 = unsafe { prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) };
+
+    let r2 = unsafe { prctl(PR_SET_PTRACER, 0, 0, 0, 0) };
+
+    if r1 != 0 || r2 != 0 {
+        error!(
+            "Failed to harden against ptrace: {}",
+            io::Error::last_os_error()
+        );
         0
     } else {
-        info!("Ptrace disabled");
+        info!("Ptrace effectively disabled (dumpable=0, no future tracer)");
         1
     }
 }
