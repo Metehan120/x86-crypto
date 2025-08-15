@@ -189,6 +189,10 @@ pub enum AesError {
     InvalidLength,
     #[error("Cannot Decrypt, Authentication failed")]
     AuthenticationFailed,
+    #[error("AES-NI not supported on this device")]
+    AesNiNotSupported,
+    #[error("VAES not supported on this device")]
+    VaesNotSupported,
 }
 
 /// This mode was deprecated before it even saw daylight.
@@ -287,8 +291,8 @@ impl Aes256CTR {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -318,11 +322,7 @@ impl Aes256CTR {
         Ok(data)
     }
 
-    pub fn encrypt_inplace<T: AsMut<[u8]>>(
-        &self,
-        src_dst: &mut T,
-        nonce: Nonce96,
-    ) -> Result<(), AesError> {
+    pub fn encrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<(), AesError> {
         assert_size_ok(src_dst.as_mut().len(), 1)?;
 
         let chunk_size = 16;
@@ -350,8 +350,8 @@ impl Aes256CTR {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -385,11 +385,7 @@ impl Aes256CTR {
         self.encrypt(src, nonce)
     }
 
-    pub fn decrypt_inplace<T: AsMut<[u8]>>(
-        &self,
-        src_dst: &mut T,
-        nonce: Nonce96,
-    ) -> Result<(), AesError> {
+    pub fn decrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<(), AesError> {
         self.encrypt_inplace(src_dst, nonce)
     }
 }
@@ -495,8 +491,8 @@ impl Aes256 {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -592,9 +588,9 @@ impl Aes256 {
         self.encrypt_with_aad(src, nonce, &[])
     }
 
-    pub fn encrypt_inplace_with_aad<T: AsMut<[u8]>>(
+    pub fn encrypt_inplace_with_aad(
         &self,
-        src_dst: &mut T,
+        src_dst: &mut [u8],
         nonce: Nonce96,
         aad: &[u8],
     ) -> Result<Tag128, AesError> {
@@ -607,11 +603,7 @@ impl Aes256 {
         Ok(Tag128::from_array(tag))
     }
 
-    pub fn encrypt_inplace<T: AsMut<[u8]>>(
-        &self,
-        src_dst: &mut T,
-        nonce: Nonce96,
-    ) -> Result<Tag128, AesError> {
+    pub fn encrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<Tag128, AesError> {
         self.encrypt_inplace_with_aad(src_dst, nonce, &[])
     }
 
@@ -659,9 +651,9 @@ impl Aes256 {
         self.decrypt_with_aad(src, nonce, &[])
     }
 
-    pub fn decrypt_inplace_with_tag_aad<T: AsMut<[u8]>>(
+    pub fn decrypt_inplace_with_tag_aad(
         &self,
-        src_dst: &mut T,
+        src_dst: &mut [u8],
         nonce: Nonce96,
         aad: &[u8],
         tag: Tag128,
@@ -687,9 +679,9 @@ impl Aes256 {
         self.ctr_inplace(src_dst.as_mut(), &nonce)
     }
 
-    pub fn decrypt_inplace_with_tag<T: AsMut<[u8]>>(
+    pub fn decrypt_inplace_with_tag(
         &self,
-        src: &mut T,
+        src: &mut [u8],
         nonce: Nonce96,
         tag: Tag128,
     ) -> Result<(), AesError> {
