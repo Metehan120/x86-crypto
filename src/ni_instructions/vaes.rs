@@ -69,7 +69,7 @@ pub fn loadu_vaes512keys(keys: [__vaes256key; 23]) -> __vaes512keys {
     __vaes512keys(keys)
 }
 
-#[inline(always)]
+#[target_feature(enable = "vaes,avx2")]
 /// Loads 32 bytes from a raw pointer into a `__vaes256i` block.
 ///
 /// This performs an unaligned load.
@@ -96,7 +96,7 @@ pub fn loadu_vaes256_mm256i(data: __m256i) -> __vaes256i {
     __vaes256i(data)
 }
 
-#[inline(always)]
+#[target_feature(enable = "vaes,avx2")]
 /// Loads 32 bytes from a raw pointer into a `__vaes256key` block.
 ///
 /// This performs an unaligned load.
@@ -123,7 +123,7 @@ pub fn loadu_vaeskey_m256i(key: __m256i) -> __vaes256key {
     __vaes256key(key)
 }
 
-#[inline(always)]
+#[target_feature(enable = "vaes,avx2")]
 /// Stores 32 bytes from a `__vaes256i` block to a raw pointer.
 ///
 /// This performs an unaligned store.
@@ -136,7 +136,7 @@ pub unsafe fn storeu_vaes(output: *mut u8, data: __vaes256i) {
     _mm256_storeu_si256(output as *mut __m256i, data.0)
 }
 
-#[inline(always)]
+#[target_feature(enable = "vaes,avx2")]
 /// Stores 32 bytes from a `__vaes256key` block to a raw pointer.
 ///
 /// This performs an unaligned store.
@@ -149,8 +149,8 @@ pub unsafe fn storeu_vaeskey(output: *mut u8, data: __vaes256key) {
     _mm256_storeu_si256(output as *mut __m256i, data.0)
 }
 
-#[inline(always)]
 #[allow(unsafe_op_in_unsafe_fn)]
+#[target_feature(enable = "vaes,avx2")]
 pub fn make_dec_keys_128(rk_enc: &[__m128i; 15]) -> [__m128i; 15] {
     unsafe {
         let mut dec: [__m128i; 15] = core::mem::zeroed();
@@ -167,7 +167,7 @@ pub fn make_dec_keys_128(rk_enc: &[__m128i; 15]) -> [__m128i; 15] {
 ///
 /// # Panics
 /// Panics if the host CPU does not support the `vaes` instruction set.
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesenc_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
     unsafe {
@@ -185,7 +185,7 @@ pub unsafe fn vaesenc_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes25
 ///
 /// # Panics
 /// Panics if the host CPU does not support the `vaes` instruction set.
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesdec_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
 
@@ -204,7 +204,7 @@ pub unsafe fn vaesdec_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes25
 ///
 /// # Panics
 /// Panics if the host CPU does not support the `vaes` instruction set.
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesenc_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
     unsafe {
@@ -222,7 +222,7 @@ pub unsafe fn vaesenc_last_asm(data: __vaes256i, round_key: __vaes256key) -> __v
 ///
 /// # Panics
 /// Panics if the host CPU does not support the `vaes` instruction set.
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesdec_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
     unsafe {
@@ -236,22 +236,22 @@ pub unsafe fn vaesdec_last_asm(data: __vaes256i, round_key: __vaes256key) -> __v
     __vaes256i(result)
 }
 
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub fn vaesenc_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     __vaes256i(_mm256_aesenc_epi128(data.0, round_key.0))
 }
 
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub fn vaesdec_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     __vaes256i(_mm256_aesdec_epi128(data.0, round_key.0))
 }
 
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub fn vaesenc_last_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     __vaes256i(_mm256_aesenclast_epi128(data.0, round_key.0))
 }
 
-#[target_feature(enable = "vaes,avx")]
+#[target_feature(enable = "vaes,avx2")]
 pub fn vaesdec_last_intrinsic(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     __vaes256i(_mm256_aesdeclast_epi128(data.0, round_key.0))
 }
