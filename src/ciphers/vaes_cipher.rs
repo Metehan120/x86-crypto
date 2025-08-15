@@ -96,26 +96,46 @@ impl Nonce192 {
     }
 }
 
+#[inline]
+fn assert_size_ok(len_bytes: usize, start_counter: u32) -> Result<(), AesError> {
+    let max_blocks = u64::from(u32::MAX) - u64::from(start_counter) + 1;
+    let max_bytes = max_blocks * 16;
+    let len_u64 = len_bytes as u64;
+    if len_u64 > max_bytes {
+        return Err(AesError::MaxSizeExceeded(max_bytes, len_u64));
+    }
+    Ok(())
+}
+
 pub struct Vaes256CTR {
     key: [__m256i; 15],
 }
 
 impl Vaes256CTR {
-    pub fn new(key: &[u8]) -> Self {
-        #[cfg(feature = "dev-logs")]
-        debug!("Created new AES-256 cipher instance");
+    pub fn new<T: AsRef<[u8]>>(key: T) -> Result<Self, AesError> {
+        if is_x86_feature_detected!("vaes") {
+            #[cfg(feature = "dev-logs")]
+            debug!("Created new AES-256 cipher instance");
+            let key = key.as_ref();
 
-        let key = [unsafe { key[..16].load() }, unsafe { key[16..].load() }];
+            if key.len() != 32 {
+                return Err(AesError::InvalidPasswordLenght);
+            }
 
-        let keys = AES_NI.expand_aes256_key(key);
-        let key = storeu_keys_256(keys);
+            let key = [unsafe { key[..16].load() }, unsafe { key[16..].load() }];
 
-        let mut rk256: [__m256i; 15] = unsafe { core::mem::zeroed() };
-        for i in 0..15 {
-            rk256[i] = unsafe { _mm256_broadcastsi128_si256(key[i]) };
+            let keys = AES_NI.expand_aes256_key(key);
+            let key = storeu_keys_256(keys);
+
+            let mut rk256: [__m256i; 15] = unsafe { core::mem::zeroed() };
+            for i in 0..15 {
+                rk256[i] = unsafe { _mm256_broadcastsi128_si256(key[i]) };
+            }
+
+            Ok(Self { key: rk256 })
+        } else {
+            return Err(AesError::VaesNotSupported);
         }
-
-        Self { key: rk256 }
     }
 
     #[inline(always)]
@@ -142,7 +162,8 @@ impl Vaes256CTR {
         block
     }
 
-    pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) {
+    pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) -> Result<(), AesError> {
+        assert_size_ok(plaintext.len(), 1)?;
         let chunk_size = 32;
         let main_len = plaintext.len() / chunk_size * chunk_size;
         let (main, tail) = plaintext.split_at_mut(main_len);
@@ -156,10 +177,12 @@ impl Vaes256CTR {
                 let mut iv = [0u8; 32];
 
                 iv[..12].copy_from_slice(&nonce.0[..12]);
-                iv[12..16].copy_from_slice(&(i as u32 * 2 + 1).to_be_bytes());
+                iv[12..16]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(1)).to_be_bytes());
 
                 iv[16..28].copy_from_slice(&nonce.0[12..]);
-                iv[28..32].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+                iv[28..32]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(2)).to_be_bytes());
 
                 let encrypted_iv = self
                     .encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
@@ -169,10 +192,10 @@ impl Vaes256CTR {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -202,10 +225,14 @@ impl Vaes256CTR {
                 tail[j] ^= buf[j];
             }
         }
+
+        Ok(())
     }
 
-    pub fn decrypt(&self, ciphertext: &mut [u8], nonce: Nonce192) {
-        self.encrypt(ciphertext, nonce);
+    pub fn decrypt(&self, ciphertext: &mut [u8], nonce: Nonce192) -> Result<(), AesError> {
+        self.encrypt(ciphertext, nonce)?;
+
+        Ok(())
     }
 }
 
@@ -230,21 +257,30 @@ pub struct Vaes256 {
 }
 
 impl Vaes256 {
-    pub fn new(key: &[u8; 32]) -> Self {
-        #[cfg(feature = "dev-logs")]
-        debug!("Created new AES-256 cipher instance");
+    pub fn new<T: AsRef<[u8]>>(key: T) -> Result<Self, AesError> {
+        if is_x86_feature_detected!("vaes") {
+            #[cfg(feature = "dev-logs")]
+            debug!("Created new AES-256 cipher instance");
+            let key = key.as_ref();
 
-        let key = [unsafe { key[..16].load() }, unsafe { key[16..].load() }];
+            if key.len() != 32 {
+                return Err(AesError::InvalidPasswordLenght);
+            }
 
-        let keys = AES_NI.expand_aes256_key(key);
-        let key = storeu_keys_256(keys);
+            let key = [unsafe { key[..16].load() }, unsafe { key[16..].load() }];
 
-        let mut rk256: [__m256i; 15] = unsafe { core::mem::zeroed() };
-        for i in 0..15 {
-            rk256[i] = unsafe { _mm256_broadcastsi128_si256(key[i]) };
+            let keys = AES_NI.expand_aes256_key(key);
+            let key = storeu_keys_256(keys);
+
+            let mut rk256: [__m256i; 15] = unsafe { core::mem::zeroed() };
+            for i in 0..15 {
+                rk256[i] = unsafe { _mm256_broadcastsi128_si256(key[i]) };
+            }
+
+            Ok(Self { key: rk256 })
+        } else {
+            return Err(AesError::VaesNotSupported);
         }
-
-        Self { key: rk256 }
     }
 
     #[inline(always)]
@@ -271,7 +307,8 @@ impl Vaes256 {
         block
     }
 
-    fn ctr(&self, src: &mut [u8], nonce: Nonce192) {
+    fn ctr(&self, src: &mut [u8], nonce: Nonce192) -> Result<(), AesError> {
+        assert_size_ok(src.len(), 2)?;
         let chunk_size = 32;
         let main_len = src.len() / chunk_size * chunk_size;
         let (main, tail) = src.split_at_mut(main_len);
@@ -285,10 +322,12 @@ impl Vaes256 {
                 let mut iv = [0u8; 32];
 
                 iv[..12].copy_from_slice(&nonce.0[..12]);
-                iv[12..16].copy_from_slice(&(i as u32 * 2 + 2).to_be_bytes());
+                iv[12..16]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(2)).to_be_bytes());
 
                 iv[16..28].copy_from_slice(&nonce.0[12..]);
-                iv[28..32].copy_from_slice(&(i as u32 * 2 + 3).to_be_bytes());
+                iv[28..32]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(3)).to_be_bytes());
 
                 let encrypted_iv = self
                     .encrypt_block(unsafe { _mm256_loadu_si256(iv.as_ptr() as *const __m256i) });
@@ -298,10 +337,10 @@ impl Vaes256 {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(128) as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr().add(256) as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -331,6 +370,8 @@ impl Vaes256 {
                 tail[j] ^= buf[j];
             }
         }
+
+        Ok(())
     }
 
     #[inline(always)]
@@ -364,12 +405,33 @@ impl Vaes256 {
         tag
     }
 
-    pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) -> Tag128 {
-        self.ctr(plaintext, nonce);
+    pub fn encrypt(&self, plaintext: &mut [u8], nonce: Nonce192) -> Result<Tag128, AesError> {
+        self.ctr(plaintext, nonce)?;
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes.copy_from_slice(&nonce.0[..12]);
 
-        Tag128::from_array(self.compute_tag_vaes(&[], nonce_bytes, &plaintext))
+        Ok(Tag128::from_array(self.compute_tag_vaes(
+            &[],
+            nonce_bytes,
+            &plaintext,
+        )))
+    }
+
+    pub fn encrypt_with_aad(
+        &self,
+        plaintext: &mut [u8],
+        nonce: Nonce192,
+        aad: &[u8],
+    ) -> Result<Tag128, AesError> {
+        self.ctr(plaintext, nonce)?;
+        let mut nonce_bytes = [0u8; 12];
+        nonce_bytes.copy_from_slice(&nonce.0[..12]);
+
+        Ok(Tag128::from_array(self.compute_tag_vaes(
+            aad,
+            nonce_bytes,
+            &plaintext,
+        )))
     }
 
     pub fn decrypt(
@@ -382,14 +444,35 @@ impl Vaes256 {
         nonce_bytes.copy_from_slice(&nonce.0[..12]);
         let mut computed_tag = self.compute_tag_vaes(&[], nonce_bytes, ciphertext);
 
-        #[cfg(debug_assertions)]
         if constant_time_ops::compare_bytes(tag.as_bytes(), &computed_tag) == 0 {
             computed_tag.zeroize();
             return Err(AesError::AuthenticationFailed);
         }
         computed_tag.zeroize();
 
-        self.ctr(ciphertext, nonce);
+        self.ctr(ciphertext, nonce)?;
+
+        Ok(())
+    }
+
+    pub fn decrypt_with_aad(
+        &self,
+        ciphertext: &mut [u8],
+        nonce: Nonce192,
+        tag: &Tag128,
+        aad: &[u8],
+    ) -> Result<(), AesError> {
+        let mut nonce_bytes = [0u8; 12];
+        nonce_bytes.copy_from_slice(&nonce.0[..12]);
+        let mut computed_tag = self.compute_tag_vaes(aad, nonce_bytes, ciphertext);
+
+        if constant_time_ops::compare_bytes(tag.as_bytes(), &computed_tag) == 0 {
+            computed_tag.zeroize();
+            return Err(AesError::AuthenticationFailed);
+        }
+        computed_tag.zeroize();
+
+        self.ctr(ciphertext, nonce)?;
 
         Ok(())
     }
@@ -408,7 +491,7 @@ fn test_vaes_encrypt_aesgcm_decrypt() {
 
     let key = [1u8; 32];
 
-    let vaes = Vaes256::new(&key);
+    let vaes = Vaes256::new(&key).unwrap();
 
     let aes_gcm = Aes256Gcm::new(GenericArray::from_slice(&key));
 
@@ -418,7 +501,7 @@ fn test_vaes_encrypt_aesgcm_decrypt() {
 
     let mut plaintext = (0u8..255).collect::<Vec<_>>();
 
-    let tag = vaes.encrypt(&mut plaintext, nonce192);
+    let tag = vaes.encrypt(&mut plaintext, nonce192).unwrap();
 
     let mut ct_and_tag = plaintext.clone();
     ct_and_tag.extend_from_slice(tag.as_bytes());
