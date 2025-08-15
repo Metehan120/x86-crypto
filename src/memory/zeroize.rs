@@ -43,25 +43,7 @@ macro_rules! zeroize {
     ($($type:ty)*) => {
         $(impl Zeroizeable for [$type] {
             fn zeroize(&mut self) {
-                zeroize_func(self)
-            }
-        })*
-    };
-}
-
-pub trait SimdZeroize {
-    fn par_zeroize(&mut self);
-    fn avx_par_zeroize(&mut self);
-}
-
-macro_rules! simdzeroize {
-    ($($type:ty)*) => {
-        $(impl SimdZeroize for [$type] {
-            fn par_zeroize(&mut self) {
-                unsafe { avx2_zeroize(self) }
-            }
-            fn avx_par_zeroize(&mut self) {
-                unsafe { avx_zeroize(self) }
+                zeroize_auto(self)
             }
         })*
     };
@@ -69,7 +51,6 @@ macro_rules! simdzeroize {
 
 zeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d f64 f32 }
 randzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 }
-simdzeroize! { usize u8 u16 u32 u64 i8 i16 i32 i64 __m128i __m256i __m128 __m256 __m128d __m256d f64 f32 }
 
 #[inline(never)]
 pub fn zeroize_func<T>(data: &mut [T]) {
@@ -157,6 +138,7 @@ pub fn avx2_zeroize<T>(data: &mut [T]) {
         }
 
         volatile_touch(tail);
+        compiler_fence(Ordering::SeqCst);
         _mm_sfence();
     }
 }
@@ -194,6 +176,17 @@ pub fn avx_zeroize<T>(data: &mut [T]) {
         }
 
         volatile_touch(tail);
+        compiler_fence(Ordering::SeqCst);
         _mm_sfence();
+    }
+}
+
+pub fn zeroize_auto<T>(buf: &mut [T]) {
+    if is_x86_feature_detected!("avx2") {
+        unsafe { avx2_zeroize(buf) }
+    } else if is_x86_feature_detected!("avx") {
+        unsafe { avx_zeroize(buf) }
+    } else {
+        zeroize_func(buf)
     }
 }
