@@ -6,8 +6,10 @@ use x86_crypto::{
     },
     memory::{
         securevec::SecureVec,
-        zeroize::{SimdZeroize, Zeroizeable},
+        sys_control::{disable_dump, lock_all_memory},
+        zeroize::Zeroizeable,
     },
+    ni_instructions::aesni::LoadRegister,
     rng::{HWChaCha20Rng, HardwareRNG},
 };
 
@@ -15,7 +17,10 @@ use x86_crypto::{
 fn general() {
     env_logger::init();
 
-    let mut data = vec![1u8; 256];
+    disable_dump();
+    lock_all_memory();
+
+    let mut data = vec![1u8; 1000];
     let mut key: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
     key.fill_random(&mut HWChaCha20Rng::new().unwrap()).unwrap();
     let mut key2 = SecureVec::with_capacity(32).unwrap();
@@ -26,20 +31,26 @@ fn general() {
     let nonce = Nonce96::generate_nonce(&mut HardwareRNG);
     let mut output = test.encrypt(&data, nonce).unwrap();
 
-    let ctr = Vaes256CTR::new(&key);
+    let ctr = Vaes256CTR::new(&key).unwrap();
     let mut nonce2 = [0u8; 24];
     nonce2[..12].copy_from_slice(nonce.as_slice());
     nonce2[12..].copy_from_slice(nonce.as_slice());
     let nonce = Nonce192::from_bytes(nonce2);
 
-    ctr.decrypt(&mut output, nonce);
-    println!("{:?}", output);
+    ctr.decrypt(&mut output, nonce).unwrap();
 
     key.zeroize();
     data.zeroize();
-    output.par_zeroize();
 
-    println!("{:?}", output)
+    let mut output = vec![0u32; 256];
+    output.zeroize();
+    let mut vec = SecureVec::with_capacity(256).unwrap();
+    vec.extend_from_slice(&[0u32; 256]).unwrap();
+
+    let data = unsafe { vec![0u8; 16].load() };
+    let mut data = vec![data; 1024 * 1024];
+
+    data.zeroize();
 }
 
 use aes_gcm::{
