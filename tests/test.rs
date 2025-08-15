@@ -13,6 +13,7 @@ use x86_crypto::{
     rng::{HWChaCha20Rng, HardwareRNG},
 };
 
+#[cfg(target_os = "linux")]
 #[test]
 fn general() {
     env_logger::init();

@@ -30,7 +30,7 @@ trace-logs = []
 debug-alloc = []
 cipher-prefetch-warn = []
 vaes_asm_cipher = []
-vaes = []
+vaes = ["aes_cipher"]
 all = ["compression_test", "secure_memory", "all_aes", "tls"]
 
 [dependencies]
@@ -48,7 +48,7 @@ rayon = { version = "1.11.0", optional = true }
 lz4_flex = { version = "0.11.5", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = { version = "0.2", optional = true }
+libc = { version = "0.2.175", optional = true }
 
 [dev-dependencies]
 env_logger = "0.11.8"

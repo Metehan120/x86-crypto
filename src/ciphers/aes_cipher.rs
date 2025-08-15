@@ -18,9 +18,10 @@ use thiserror_no_std::Error;
 use universal_hash::{Key, KeyInit, UniversalHash};
 
 use crate::{
-    CryptoRNG, constant_time_ops,
+    constant_time_ops,
     memory::zeroize::Zeroizeable,
     ni_instructions::aesni::{__rsi256keys, AES, AES_NI, LoadRegister, StoreRegister},
+    rng::CryptoRNG,
     types,
 };
 

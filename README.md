@@ -74,6 +74,8 @@ fn main() {
 | `compression_test`  | LZ4 compression benchmarks for testing      |
 | ...                 | And more                                    |
 
+* NOTE: Never use Prefetching in production
+
 ---
 
 ## Security

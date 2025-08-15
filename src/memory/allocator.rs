@@ -141,11 +141,22 @@ unsafe impl GlobalAlloc for SecureAllocator {
         unsafe {
             let ptr = System.alloc(layout);
             if !ptr.is_null() {
-                if mlock2(ptr as *mut libc::c_void, layout.size(), libc::MLOCK_ONFAULT) != 0
-                    && mlock(ptr as *mut libc::c_void, layout.size()) != 0
+                #[cfg(target_os = "linux")]
                 {
-                    System.dealloc(ptr, layout);
-                    return std::ptr::null_mut();
+                    if mlock2(ptr as *mut libc::c_void, layout.size(), libc::MLOCK_ONFAULT) != 0
+                        && mlock(ptr as *mut libc::c_void, layout.size()) != 0
+                    {
+                        System.dealloc(ptr, layout);
+                        return std::ptr::null_mut();
+                    }
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    if mlock(ptr as *mut libc::c_void, layout.size()) != 0 {
+                        System.dealloc(ptr, layout);
+                        return std::ptr::null_mut();
+                    }
                 }
 
                 std::ptr::write_bytes(ptr, 0, layout.size());

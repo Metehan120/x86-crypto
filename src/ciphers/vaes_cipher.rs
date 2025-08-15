@@ -1,5 +1,4 @@
 use crate::{
-    CryptoRNG,
     ciphers::aes_cipher::{AesError, Tag128},
     constant_time_ops,
     memory::zeroize::Zeroizeable,
@@ -7,6 +6,7 @@ use crate::{
         aesni::{AES, AES_NI, LoadRegister, storeu_keys_256},
         vaes::{__vaes256i, loadu_vaes256_mm256i, loadu_vaeskey_m256i},
     },
+    rng::CryptoRNG,
     types,
 };
 
@@ -194,8 +194,6 @@ impl Vaes256CTR {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
                     _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
                     _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }
                 #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
                 trace!("Prefetch completed");
@@ -337,8 +335,6 @@ impl Vaes256 {
                 #[cfg(feature = "cipher_prefetch")]
                 unsafe {
                     use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                     _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
                     _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
                 }

@@ -1,5 +1,6 @@
 [build]
 rustflags = [
+    "-C", "target-cpu=native",
     "-C", "target-feature=+sse,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2",
     "-C", "target-feature=+popcnt,+fma,+avx,+avx2",
     "-C", "target-feature=+bmi1,+bmi2,+lzcnt",

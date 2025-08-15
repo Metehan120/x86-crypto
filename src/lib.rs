@@ -3,25 +3,19 @@
 #![allow(non_camel_case_types)]
 
 use core::arch::x86_64::__rdtscp;
-use core::ops::{Deref, DerefMut};
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 compile_error!("This library is only developed for the x86 and x86_64 architectures.");
-use thiserror_no_std::Error;
-
-use crate::memory::allocator::AllocatorError;
-use crate::memory::securevec::SecureVec;
-use crate::rng::{CryptoRNG, HardwareRNG, RngErrors};
 
 pub mod rng;
 
-#[cfg(target_os = "linux")]
-#[cfg(feature = "std")]
-#[cfg(feature = "secure_memory")]
 pub mod memory {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(feature = "std")]
+    #[cfg(feature = "secure_memory")]
     pub mod allocator;
     pub mod memory_obfuscation;
     /// Secure memory allocator for Linux systems that prevents sensitive data from being swapped to disk.
@@ -44,8 +38,19 @@ pub mod memory {
     /// secure_data.extend_from_slice(&encryption_key)?;
     /// // Memory automatically secured and cleaned up
     /// ```
+    ///
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(feature = "std")]
+    #[cfg(feature = "secure_memory")]
     pub mod securevec;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(feature = "std")]
+    #[cfg(feature = "secure_memory")]
     pub mod securevec_traits;
+    #[cfg(feature = "std")]
+    pub mod sys_control;
+    #[doc = "`Stable Since 0.2.0`"]
+    /// \- Secure Zeroize module
     pub mod zeroize;
 }
 
@@ -83,9 +88,13 @@ pub mod cache_operations;
 /// let result: [u8; 16] = encrypted.store();
 /// ```
 pub mod ni_instructions {
+    #[doc = "`Stable Since 0.1.0`"]
+    /// \- AES-NI intrinsic module
     pub mod aesni;
     pub mod pcmul;
     pub mod shani;
+    #[doc = "`Stable Since 0.2.0`"]
+    /// \- VAES intrinsic module
     pub mod vaes;
 }
 
@@ -103,8 +112,8 @@ pub mod ni_instructions {
 ///
 /// # Example
 /// ```rust
-/// let plaintext = SimdU8::load([0x42; 1000]);
-/// let key = SimdU8::load([0xAA; 1000]);
+/// let plaintext = SimdU8::load([0x42; 1024]);
+/// let key = SimdU8::load([0xAA; 1024]);
 /// let encrypted = plaintext ^ key;  // Vectorized XOR
 /// ```
 pub mod simd;
@@ -149,6 +158,7 @@ pub mod ciphers {
     pub mod aes_cipher;
 
     #[cfg(feature = "vaes")]
+    #[doc = "`Unstable`"]
     /// THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
     pub mod vaes_cipher;
 }
@@ -698,65 +708,76 @@ macro_rules! types {
     };
 }
 
-#[repr(transparent)]
-pub struct KeyGenerator(SecureVec<u8>);
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(feature = "secure_memory")]
+#[cfg(feature = "std")]
+pub mod key {
+    use crate::memory::allocator::AllocatorError;
+    use crate::memory::securevec::SecureVec;
+    use crate::rng::{CryptoRNG, HardwareRNG, RngErrors};
+    use core::ops::{Deref, DerefMut};
+    use thiserror_no_std::Error;
 
-impl KeyGenerator {
-    pub fn new(cap: usize) -> Result<Self, AllocatorError> {
-        let mut vec = SecureVec::with_capacity(cap)?;
-        vec.fill(0)?;
-        Ok(Self(vec))
+    #[repr(transparent)]
+    pub struct KeyGenerator(SecureVec<u8>);
+
+    impl KeyGenerator {
+        pub fn new(cap: usize) -> Result<Self, AllocatorError> {
+            let mut vec = SecureVec::with_capacity(cap)?;
+            vec.fill(0)?;
+            Ok(Self(vec))
+        }
+
+        pub fn generate(mut self, rng: &mut impl CryptoRNG) -> Result<Self, RngErrors> {
+            rng.try_fill_by(&mut self.0)?;
+            Ok(self)
+        }
+
+        pub fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
     }
 
-    pub fn generate(mut self, rng: &mut impl CryptoRNG) -> Result<Self, RngErrors> {
-        rng.try_fill_by(&mut self.0)?;
-        Ok(self)
+    impl AsRef<[u8]> for KeyGenerator {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
+    impl Deref for KeyGenerator {
+        type Target = SecureVec<u8>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    impl DerefMut for KeyGenerator {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
     }
-}
 
-impl AsRef<[u8]> for KeyGenerator {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
+    impl core::fmt::Debug for KeyGenerator {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "Key([REDACTED]; {} bytes)", self.len())
+        }
     }
-}
 
-impl Deref for KeyGenerator {
-    type Target = SecureVec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    #[derive(Debug, Error)]
+    pub enum KeyGenError {
+        #[error("Cannot Generate Random key reason: {0}")]
+        KeyError(String),
     }
-}
 
-impl DerefMut for KeyGenerator {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+    pub fn rand_key<const U: usize>() -> Result<KeyGenerator, KeyGenError> {
+        KeyGenerator::new(U)
+            .map_err(|e| KeyGenError::KeyError(e.to_string()))?
+            .generate(&mut HardwareRNG)
+            .map_err(|e| KeyGenError::KeyError(e.to_string()))
     }
-}
-
-impl core::fmt::Debug for KeyGenerator {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Key([REDACTED]; {} bytes)", self.len())
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum KeyGenError {
-    #[error("Cannot Generate Random key reason: {0}")]
-    KeyError(String),
-}
-
-pub fn rand_key<const U: usize>() -> Result<KeyGenerator, KeyGenError> {
-    KeyGenerator::new(U)
-        .map_err(|e| KeyGenError::KeyError(e.to_string()))?
-        .generate(&mut HardwareRNG)
-        .map_err(|e| KeyGenError::KeyError(e.to_string()))
 }

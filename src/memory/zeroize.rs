@@ -7,10 +7,7 @@ use core::{
     sync::atomic::{Ordering, compiler_fence},
 };
 
-use crate::{
-    CryptoRNG, RngErrors,
-    rng::{HWChaCha20Rng, HardwareRandomizable},
-};
+use crate::rng::{CryptoRNG, HWChaCha20Rng, HardwareRandomizable, RngErrors};
 
 /// Random-fill-then-zero memory clearing trait.
 ///
