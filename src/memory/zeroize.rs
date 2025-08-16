@@ -143,7 +143,7 @@ pub fn avx2_zeroize<T>(data: &mut [T]) {
 #[deprecated(since = "0.2.0-alpha", note = "Use `sse_zeroize` instead")]
 pub fn avx_zeroize() {}
 
-#[target_feature(enable = "avx")]
+#[target_feature(enable = "sse4.1")]
 pub fn sse_zeroize<T>(data: &mut [T]) {
     let elem_size = core::mem::size_of::<T>();
     let chunk_size = 80 / core::mem::size_of::<T>();
