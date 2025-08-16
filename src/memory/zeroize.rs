@@ -140,8 +140,11 @@ pub fn avx2_zeroize<T>(data: &mut [T]) {
     }
 }
 
+#[deprecated(since = "0.2.0-alpha", note = "Use `sse_zeroize` instead")]
+pub fn avx_zeroize() {}
+
 #[target_feature(enable = "avx")]
-pub fn avx_zeroize<T>(data: &mut [T]) {
+pub fn sse_zeroize<T>(data: &mut [T]) {
     let elem_size = core::mem::size_of::<T>();
     let chunk_size = 80 / core::mem::size_of::<T>();
     let tail_len = data.len() % chunk_size;
@@ -181,8 +184,8 @@ pub fn avx_zeroize<T>(data: &mut [T]) {
 pub fn zeroize_auto<T>(buf: &mut [T]) {
     if is_x86_feature_detected!("avx2") {
         unsafe { avx2_zeroize(buf) }
-    } else if is_x86_feature_detected!("avx") {
-        unsafe { avx_zeroize(buf) }
+    } else if is_x86_feature_detected!("sse4.2") {
+        unsafe { sse_zeroize(buf) }
     } else {
         zeroize_func(buf)
     }
