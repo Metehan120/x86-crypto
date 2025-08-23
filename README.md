@@ -31,6 +31,17 @@
 
 ---
 
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+x86-crypto = { git = "https://github.com/Metehan120/x86-crypto" }
+```
+
+---
+
 ## Speed
 
 Benchmarks were run on **AMD Ryzen 5 5600X**, compiled with `--release`.
@@ -50,17 +61,6 @@ Benchmarks were run on **AMD Ryzen 5 5600X**, compiled with `--release`.
 |----------------------------|----------------|-----------------|
 | aes-gcm                    | 57.6 ms        | baseline        |
 | x86-crypto (VAES & AES-NI) | 42.7 ms        | **~35% faster** |
-
----
-
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-x86-crypto = { git = "https://github.com/Metehan120/x86-crypto" }
-```
 
 ---
 
