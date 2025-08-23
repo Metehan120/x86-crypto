@@ -7,7 +7,7 @@
 ## Features
 
 * **AES-CTR / AES-GCM** with AES-NI acceleration
-* **VAES-GCM** (parallelized 2× block CTR + GHASH) for VAES-capable CPUs
+* **VAES-GCM / VAES-CTR** (parallelized 2× block CTR + GHASH) for VAES-capable CPUs
 * **GHASH** accelerated with PCLMULQDQ
 * **ChaCha20** with hardware RNG seeding
 * **SecureVec**: `mlock`-based, zeroing, capacity-checked secure allocator
@@ -28,6 +28,28 @@
   - AMD Ryzen (Zen 1+)
   - Majority of tests performed on Ryzen 5 5600X & Ryzen 5 3600
   - Also verified on Ryzen 3 4100 & Ryzen 3 2200
+
+---
+
+## Speed
+
+Benchmarks were run on **AMD Ryzen 5 5600X**, compiled with `--release`.
+
+| Algorithm | Speed (GB/s) |
+|-----------|--------------|
+| VAES-CTR  |  9.3         |
+| VAES-GCM  |  2.3         |
+| AES-CTR   |  4.6         |
+| AES-GCM   |  1.8         |
+
+---
+
+## Speed Comparison Against `aes-gcm` crate, 100MB buffer
+
+| Crate                      | Criterion (ms) | Relative Speed  |
+|----------------------------|----------------|-----------------|
+| aes-gcm                    | 57.6 ms        | baseline        |
+| x86-crypto (VAES & AES-NI) | 42.7 ms        | **~35% faster** |
 
 ---
 
@@ -68,7 +90,7 @@ fn main() {
 | `secure_memory`     | Enables mlock-based SecureVec allocator     |
 | `aes_cipher`        | AES-CTR and AES-ECB support                 |
 | `aes_gcm`           | AES-GCM mode (requires `aes_cipher`)        |
-| `experimental_vaes` | VAES-based accelerated AES (nightly only)   |
+| `vaes`              | VAES-based accelerated AES                  |
 | `tls`               | Enables TLS handler integration with rustls |
 | `all_aes`           | Enables all AES modes                       |
 | `compression_test`  | LZ4 compression benchmarks for testing      |
@@ -92,3 +114,7 @@ fn main() {
 ## License
 
 Licensed under MIT.
+
+## Maintainer
+- Metehan Eyyub Zaferoğlu
+- metehan@zaferoglu.me
