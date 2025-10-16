@@ -14,7 +14,7 @@ categories = ["cryptography", "hardware-support", "no-std"]
 github-actions = { repository = "Metehan120/x86-crypto", workflow = "Rust Tests" }
 
 [features]
-default = ["std", "tpm-mem", "all_aes", "audit-logs", "vaes"]
+default = ["std", "secure_memory", "all_aes", "audit-logs", "vaes"]
 std = []
 compression_test = ["lz4_flex"]
 secure_memory = ["libc"]
