@@ -5,6 +5,7 @@
 ---
 
 **Important Note**: Removed TLS support due to security concerns.
+
 **Small Note**: v0.2.0-alpha-2 still under development may cause bugs on some systems. Please report any issues to the author.
 
 ---
