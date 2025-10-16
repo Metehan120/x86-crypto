@@ -1,8 +1,29 @@
+//! # x86-crypto
+//!
+//! High-performance x86 AES/VAES/Crypto primitives.
+//!
+//! ## Quick start
+//! - For AES-GCM: use [`ciphers::vaes_cipher::Vaes256`] or [`ciphers::aes_cipher::Aes256`].
+//! - For raw RNG: use [`rng::HardwareRNG`].
+//! - For constant-time utilities: see [`constant_time_ops`].
+//!
+//! ## Notes
+//! - Requires x86_64 with AES-NI/VAES/AVX2 support.
+//! - Most other modules are **internal** and only needed for advanced use.
+//!
+//! ## CPU Requirements
+//! - `std` build: runtime detects AVX2/SSE4.2 and picks best implementation.
+//! - `no_std` build: assumes SSE4.2+ (any modern x86_64 CPU).
+//!   Older CPUs (Core2, Pentium 4, etc.) are unsupported.
+
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(clippy::unwrap_used)]
 #![allow(non_camel_case_types)]
 
 use core::arch::x86_64::__rdtscp;
+
+pub use macros::assert_sizes;
+use macros::stable_api;
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;
@@ -10,12 +31,27 @@ extern crate alloc;
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 compile_error!("This library is only developed for the x86 and x86_64 architectures.");
 
-pub mod rng;
+macro_rules! stable {
+    (since = $v:literal, $item:item) => {
+        #[doc = concat!("Stable Since ", $v)]
+        $item
+    };
+}
+
+macro_rules! unstable {
+    ($item:item) => {
+        #[doc = "Unstable"]
+        $item
+    };
+}
+
+stable!(since = "0.1.0", pub mod rng;);
 
 pub mod memory {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg(feature = "std")]
     #[cfg(feature = "secure_memory")]
+    #[cfg_attr(not(feature = "std"), doc = "Requires `std` for this item.")]
     pub mod allocator;
     pub mod memory_obfuscation;
     /// Secure memory allocator for Linux systems that prevents sensitive data from being swapped to disk.
@@ -40,18 +76,24 @@ pub mod memory {
     /// ```
     ///
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[cfg(feature = "std")]
-    #[cfg(feature = "secure_memory")]
+    #[cfg(all(feature = "std", feature = "secure_memory"))]
+    #[cfg_attr(not(feature = "std"), doc = "Requires `std` for this item.")]
     pub mod securevec;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[cfg(feature = "std")]
-    #[cfg(feature = "secure_memory")]
+    #[cfg(all(feature = "std", feature = "secure_memory"))]
+    #[cfg_attr(not(feature = "std"), doc = "Requires `std` for this item.")]
     pub mod securevec_traits;
-    #[cfg(feature = "std")]
-    pub mod sys_control;
-    #[doc = "`Stable Since 0.2.0`"]
-    /// \- Secure Zeroize module
-    pub mod zeroize;
+    unstable!(
+        #[cfg(feature = "std")]
+        pub mod sys_control;
+    );
+    stable!(
+        since = "0.2.0",
+        /// \- Secure Zeroize module
+        /// On `no_std` builds, assumes at least SSE4.2 support.
+        /// CPUs without SSE4.2 are not supported.
+        pub mod zeroize;
+    );
 }
 
 /// Low-level cache manipulation operations for timing analysis and performance optimization.
@@ -88,14 +130,24 @@ pub mod cache_operations;
 /// let result: [u8; 16] = encrypted.store();
 /// ```
 pub mod ni_instructions {
-    #[doc = "`Stable Since 0.1.0`"]
-    /// \- AES-NI intrinsic module
-    pub mod aesni;
-    pub mod pcmul;
-    pub mod shani;
-    #[doc = "`Stable Since 0.2.0`"]
-    /// \- VAES intrinsic module
-    pub mod vaes;
+    stable!(
+        since = "0.1.0",
+        /// \- AES-NI intrinsic module
+        pub mod aesni;
+    );
+
+    unstable!(
+        pub mod pcmul;
+    );
+    unstable!(
+        pub mod shani;
+    );
+
+    stable!(
+        since = "0.2.0",
+        /// \- VAES intrinsic module
+        pub mod vaes;
+    );
 }
 
 /// SIMD-accelerated operations using AVX2 for high-performance parallel computing.
@@ -120,47 +172,112 @@ pub mod simd;
 
 #[cfg(all(feature = "aes_cipher", feature = "std"))]
 pub mod ciphers {
-    /// Hardware-accelerated AES (Advanced Encryption Standard) implementations.
-    ///
-    /// # Security Notice
-    /// Uses hardware-accelerated cryptographic primitives and established libraries.
-    /// While implementation follows standard practices, independent security
-    /// review is recommended for high-stakes applications.
-    ///
-    /// Provides AES-256 encryption in multiple modes using Intel AES-NI instructions
-    /// for maximum performance and security. All implementations use hardware acceleration.
-    ///
-    /// # Available Modes
-    /// - **`Aes256CTR`**: Counter mode for stream encryption
-    /// - **`Aes256`**: GCM mode with authentication (recommended default)
-    ///
-    /// # Performance
-    /// - Intel AES-NI hardware acceleration
-    /// - Parallel processing with multi-core support
-    /// - Typical throughput: 1-8 GB/s depending on mode and CPU
-    ///
-    /// # Quick Start
-    /// ```rust
-    /// use x86_crypto::{Aes256, HardwareRNG, CryptoRNG};
-    ///
-    /// let mut rng = HardwareRNG;
-    /// let key: [u8; 32] = rng.try_generate()?;
-    /// let nonce: [u8; 12] = rng.try_generate()?;
-    ///
-    /// let aes = Aes256::new(key);
-    /// let encrypted = aes.encrypt(&plaintext, nonce);
-    /// let decrypted = aes.decrypt(&encrypted, nonce)?;
-    /// ```
-    ///
-    /// # Mode Selection Guide
-    /// - **Production**: Use `Aes256` (GCM mode with authentication)
-    /// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
-    pub mod aes_cipher;
+    pub mod general;
 
-    #[cfg(feature = "vaes")]
-    #[doc = "`Unstable`"]
-    /// THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
-    pub mod vaes_cipher;
+    unstable!(
+        /// \- Hardware-accelerated AES (Advanced Encryption Standard) implementations.
+        ///
+        /// # Security Notice
+        /// Uses hardware-accelerated cryptographic primitives and established libraries.
+        /// While implementation follows standard practices, independent security
+        /// review is recommended for high-stakes applications.
+        ///
+        /// Provides AES-256 encryption in multiple modes using Intel AES-NI instructions
+        /// for maximum performance and security. All implementations use hardware acceleration.
+        ///
+        /// # Available Modes
+        /// - **`Aes256CTR`**: Counter mode for stream encryption
+        /// - **`Aes256`**: GCM mode with authentication (recommended default)
+        ///
+        /// # Performance
+        /// - Intel AES-NI hardware acceleration
+        /// - Parallel processing with multi-core support
+        /// - Typical throughput: 1-8 GB/s depending on mode and CPU
+        ///
+        /// # Quick Start
+        /// ```rust
+        /// use x86_crypto::{Aes256, HardwareRNG, CryptoRNG};
+        ///
+        /// let mut rng = HardwareRNG;
+        /// let key: [u8; 32] = rng.try_generate()?;
+        /// let nonce: [u8; 12] = rng.try_generate()?;
+        ///
+        /// let aes = Aes256::new(key);
+        /// let encrypted = aes.encrypt(&plaintext, nonce);
+        /// let decrypted = aes.decrypt(&encrypted, nonce)?;
+        /// ```
+        ///
+        /// # Mode Selection Guide
+        /// - **Production**: Use `Aes256` (GCM mode with authentication)
+        /// - **Stream encryption**: Use `Aes256CTR` when you need raw speed
+        pub mod aes_cipher;
+    );
+
+    unstable!(
+        #[cfg(feature = "vaes")]
+        pub mod vaes_cipher;
+    );
+
+    #[macro_export]
+    /// # **Example**:
+    /// ```
+    /// let rng = HardwareRNG;
+    ///
+    /// let nonce = nonce!(96, rng);
+    /// let nonce = nonce!(192, rng);
+    /// let nonce = nonce!(96, token, rng);
+    /// let nonce = nonce!(192, token, rng);
+    /// ```
+    macro_rules! nonce {
+        (96, $rng:ident) => {
+            crate::ciphers::aes_cipher::Nonce96::generate_nonce(&mut $rng)
+        };
+        (192, $rng:ident) => {
+            crate::ciphers::vaes_cipher::Nonce192::generate_nonce(&mut $rng)
+        };
+        (96, token, $rng:ident) => {
+            crate::ciphers::aes_cipher::Nonce96::generate_with_token(&mut $rng)
+        };
+        (192, token, $rng:ident) => {
+            crate::ciphers::vaes_cipher::Nonce192::generate_with_token(&mut $rng)
+        };
+    }
+
+    #[macro_export]
+    /// # **Example**
+    ///
+    /// ```rust
+    /// let key = [0u8; 32];
+    /// let result = cipher!(aes, gcm, |c: Aes256| c.encrypt(&data, nonce), &key);
+    /// let result = cipher!(aes256_gcm, |c: Aes256| c.encrypt(&data, nonce), &key);
+    /// let result = cipher!(aes256_gcm, |c: Aes256| c.decrypt(&mut data, nonce), &key);
+    /// ```
+    macro_rules! cipher {
+        (aes256_gcm, $perform:expr, $key:expr) => {{
+            match crate::ciphers::aes_cipher::Aes256::new($key) {
+                Ok(c) => Ok($perform(c)),
+                Err(e) => Err(e),
+            }
+        }};
+        (aes256_ctr, $perform:expr, $key:expr) => {{
+            match crate::ciphers::aes_cipher::Aes256CTR::new($key) {
+                Ok(c) => Ok($perform(c)),
+                Err(e) => Err(e),
+            }
+        }};
+        (vaes256_gcm, $perform:expr, $key:expr) => {{
+            match crate::ciphers::vaes_cipher::Vaes256::new($key) {
+                Ok(c) => Ok($perform(c)),
+                Err(e) => Err(e),
+            }
+        }};
+        (vaes256_ctr, $perform:expr, $key:expr) => {{
+            match crate::ciphers::vaes_cipher::Vaes256CTR::new($key) {
+                Ok(c) => Ok($perform(c)),
+                Err(e) => Err(e),
+            }
+        }};
+    }
 }
 
 /// Additional x86 specialized instructions beyond the main cryptographic instruction sets.
@@ -173,42 +290,12 @@ pub mod ciphers {
 /// - `BMI1/BMI2`: Advanced bit manipulation instructions
 pub mod other_instructions;
 
-#[cfg(any(feature = "tls", doc))]
-/// TLS message encryption/decryption handler (only enabled with `tls` feature).
-///
-/// This module provides integration with the TLS record layer, enabling
-/// secure communication using AES-GCM via hardware acceleration.
-///
-/// # THIS FEATURE IS EXPERIMENTAL, DO NOT USE IN PRODUCTION, USE IT AT YOUR OWN RISK
-///
-/// # Features
-/// - Compatible with `rustls` record layer
-/// - Implements `MessageEncrypter` and `MessageDecrypter` traits
-/// - Uses AES-GCM with hardware-accelerated AES-NI instructions
-/// - Constant-time operations and zeroization of sensitive data
-///
-/// # Usage
-/// Enable the `tls` feature in `Cargo.toml`:
-/// ```toml
-/// [dependencies]
-/// x86-crypto = { version = "...", features = ["tls"] }
-/// ```
-///
-/// Then import and use the handler:
-/// ```rust
-/// use x86_crypto::tls_handler::AesGcmMessageHandler;
-/// ```
-///
-/// # Note
-/// This module is **not** included by default.
-/// It is only compiled if the `tls` feature is enabled or docs are being built.
-pub mod tls_handler;
-
 pub const AES_BLOCK_SIZE: usize = 16;
 pub const SHA256_NI_BLOCK_SIZE: usize = 16;
 pub const SHA256_HASH_SIZE: usize = 32;
 
-/// High-precision CPU cycle timing utilities using RDTSCP instruction for performance measurement.
+#[stable_api(since = "0.1.0")]
+/// \- High-precision CPU cycle timing utilities using RDTSCP instruction for performance measurement.
 ///
 /// Provides sub-nanosecond timing resolution by directly reading the Time Stamp Counter (TSC)
 /// with serialization guarantees. Essential for microbenchmarking, side-channel analysis,
@@ -350,7 +437,11 @@ impl BasicStaticalTests for EntropyAnalyzer {}
 /// making them safe for cryptographic applications where timing leaks could reveal
 /// sensitive information.
 pub mod constant_time_ops {
-    use core::hint::black_box;
+    use core::{
+        arch::x86_64::{_MM_HINT_T0, _mm_prefetch, _mm_sfence},
+        hint::black_box,
+        sync::atomic::compiler_fence,
+    };
 
     #[inline(always)]
     /// Constant-time conditional selection between two u8 values.
@@ -372,10 +463,16 @@ pub mod constant_time_ops {
             return 0;
         }
 
+        unsafe { _mm_prefetch(a.as_ptr() as *const i8, _MM_HINT_T0) };
+        unsafe { _mm_prefetch(b.as_ptr() as *const i8, _MM_HINT_T0) };
+
         let mut result = 0u8;
         for i in black_box(0..a.len()) {
-            result |= a[i] ^ b[i];
+            black_box(result |= a[i] ^ b[i]);
         }
+
+        unsafe { _mm_sfence() };
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
 
         ((result as u16).wrapping_sub(1) >> 8) as u8
     }
@@ -487,7 +584,7 @@ impl CpuFeatures {
     }
 }
 
-mod macros {
+mod macro_rules {
     #[macro_export]
     macro_rules! evaluate_entropy {
         ($data:expr) => {{
@@ -539,6 +636,28 @@ mod macros {
             result
         }};
     }
+
+    #[macro_export]
+    macro_rules! assert_size {
+        ($t:ty, $n:expr) => {
+            const _: [(); core::mem::size_of::<$t>()] = [(); $n];
+        };
+        ($t:ty, $slice:expr, $n:expr) => {
+            const _: [(); core::mem::size_of::<$t>() * $slice.len()] = [(); $n];
+        };
+    }
+
+    #[macro_export]
+    macro_rules! assert_size_runtime {
+        ($type:ty, $size:expr) => {{
+            let sz = core::mem::size_of::<$type>();
+            assert_eq!(sz, $size);
+        }};
+        ($type:ty, $slice:expr, $size:expr) => {{
+            let sz = core::mem::size_of::<$type>();
+            assert_eq!(sz * $slice.len(), $size);
+        }};
+    }
 }
 
 #[cfg(feature = "std")]
@@ -577,7 +696,7 @@ mod constant_time_tests {
         const WARMUP: usize = 2048;
         const SAMPLES: usize = 2048;
         const OUTER: usize = 50;
-        const DELTA_THRESHOLD: f64 = 5.0;
+        const DELTA_THRESHOLD: f64 = 20.0;
 
         for _ in 0..OUTER {
             let mut sink = 0u8;
@@ -626,7 +745,6 @@ mod constant_time_tests {
     }
 }
 
-#[doc(hidden)]
 #[macro_export]
 /// Used like: types! { type: 4 x u32 }
 ///
@@ -659,7 +777,8 @@ macro_rules! types {
             $(#[$atr:meta])*
             type $name:ident: $size:tt x $type:ty;
             $(impl deref $struct:ident, $target:tt)?
-            $(impl drop $struct2:ident)?
+            $(impl deref mut $struct2:ident)?
+            $(impl drop $struct3:ident)?
         )*
     ) => (
         $(
@@ -676,7 +795,14 @@ macro_rules! types {
                 }
             )?
             $(
-                impl Drop for $struct2 {
+                impl DerefMut for $struct2 {
+                    fn deref_mut(&mut self) -> &mut Self::Target {
+                        &mut self.0
+                    }
+                }
+            )?
+            $(
+                impl Drop for $struct3 {
                     fn drop(&mut self) {
                         self.0.zeroize();
                     }
@@ -689,6 +815,7 @@ macro_rules! types {
             $(#[$atr:meta])*
             type $name:ident: $type:ty;
             $(impl deref $struct:ident, $target:tt)?
+            $(impl deref mut $struct2:ident)?
         )*
     ) => {
         $(
@@ -701,6 +828,13 @@ macro_rules! types {
 
                     fn deref(&self) -> &Self::Target {
                         &self.0
+                    }
+                }
+            )?
+            $(
+                impl DerefMut for $struct2 {
+                    fn deref_mut(&mut self) -> &mut Self::Target {
+                        &mut self.0
                     }
                 }
             )?

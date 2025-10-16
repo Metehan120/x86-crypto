@@ -3,6 +3,9 @@ use core::arch::{
     x86_64::{_mm_crc32_u8, _mm_crc32_u16, _mm_crc32_u32, _mm_crc32_u64},
 };
 
+use macros::stable_api;
+
+#[stable_api(since = "0.1.0")]
 /// Hardware-accelerated CRC32 checksum computation using SSE4.2 instructions.
 ///
 /// Provides direct access to x86 CRC32 instructions for high-performance

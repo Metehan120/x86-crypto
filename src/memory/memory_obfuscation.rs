@@ -60,28 +60,31 @@ impl MemoryScrambler {
     }
 }
 
+#[cfg(feature = "aes_cipher")]
 #[derive(Debug, Error)]
 pub enum AesScramblerError {
     #[error("Error: {0}")]
     Error(String),
 }
 
-#[cfg(feature = "aes_cipher")]
-/// AES-based memory scrambler for runtime data protection.
-///
-/// Note:
-/// - This scrambler does not protect against kernel-level attackers.
-/// - Key and nonce are stored in process memory.
-/// - Use with SecureVec for best effect.
-///
-/// # USE IT AT YOUR OWN RISK
-///
-/// Obfuscates sensitive data in memory using hardware-generated AES keys.
-/// Protects against memory dumps and reduces plaintext exposure time.
-pub struct AesMemoryScrambler {
-    aes: Aes256CTR,
-    nonce: Nonce96,
-}
+unstable!(
+    #[cfg(feature = "aes_cipher")]
+    /// AES-based memory scrambler for runtime data protection.
+    ///
+    /// Note:
+    /// - This scrambler does not protect against kernel-level attackers.
+    /// - Key and nonce are stored in process memory.
+    /// - Use with SecureVec for best effect.
+    ///
+    /// # USE IT AT YOUR OWN RISK
+    ///
+    /// Obfuscates sensitive data in memory using hardware-generated AES keys.
+    /// Protects against memory dumps and reduces plaintext exposure time.
+    pub struct AesMemoryScrambler {
+        aes: Aes256CTR,
+        nonce: Nonce96,
+    }
+);
 
 #[cfg(feature = "aes_cipher")]
 impl AesMemoryScrambler {
@@ -105,20 +108,6 @@ impl AesMemoryScrambler {
     pub fn descramble(&self, data: &mut [u8]) -> Result<(), AesError> {
         self.aes.decrypt_inplace(data, self.nonce)
     }
-
-    #[inline(always)]
-    pub unsafe fn scramble_raw(&self, data: *mut u8, size: usize) -> bool {
-        let buf = unsafe { from_raw_parts_mut(data, size) };
-
-        self.aes.encrypt_inplace(buf, self.nonce).is_ok()
-    }
-
-    #[inline(always)]
-    pub unsafe fn descramble_raw(&self, data: *mut u8, size: usize) -> bool {
-        let buf = unsafe { from_raw_parts_mut(data, size) };
-
-        self.aes.decrypt_inplace(buf, self.nonce).is_ok()
-    }
 }
 
 impl Drop for MemoryScrambler {
@@ -127,6 +116,7 @@ impl Drop for MemoryScrambler {
     }
 }
 
+#[cfg(feature = "aes_cipher")]
 impl Drop for AesMemoryScrambler {
     fn drop(&mut self) {
         self.nonce.0.zeroize();

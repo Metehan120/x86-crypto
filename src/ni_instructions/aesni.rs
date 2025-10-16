@@ -12,32 +12,33 @@ use log::debug;
 
 use log::trace;
 
-use crate::{memory::zeroize::Zeroizeable, types};
+use crate::{assert_size_runtime, memory::zeroize::Zeroizeable, types};
 
 /// AVX2 Register load function
 ///
 /// **Loads Array/Vec to SIMD register**
 pub trait LoadRegister {
-    unsafe fn load(&self) -> __m128i;
+    unsafe fn load_128(&self) -> __m128i;
 }
 
 /// AVX2 Register store function
 ///
 /// **Loads SIMD data to Memory**
 pub trait StoreRegister {
-    unsafe fn store(&self) -> [u8; 16];
+    unsafe fn store_128(&self) -> [u8; 16];
 }
 
 impl LoadRegister for [u8] {
     #[inline(always)]
-    unsafe fn load(&self) -> __m128i {
+    unsafe fn load_128(&self) -> __m128i {
+        assert_size_runtime!(u8, self, 16);
         unsafe { _mm_loadu_si128(self.as_ptr() as *const __m128i) }
     }
 }
 
 impl StoreRegister for __m128i {
     #[inline(always)]
-    unsafe fn store(&self) -> [u8; 16] {
+    unsafe fn store_128(&self) -> [u8; 16] {
         let mut output = [0u8; 16];
         unsafe { _mm_storeu_si128(output.as_mut_ptr() as *mut __m128i, *self) };
         output
@@ -254,6 +255,8 @@ impl AES for AES_NI {
                 round_keys[i * 2 + 1] = key_high;
             }
         }
+
+        #[cfg(feature = "dev-logs")]
         trace!("Key expansion completed (11 rounds)");
 
         loadu_keys_256(round_keys)

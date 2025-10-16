@@ -1,29 +1,66 @@
-pub use x86_crypto::*;
 use x86_crypto::{
     ciphers::{
+        self,
         aes_cipher::{Aes256, Aes256CTR, Nonce96},
+        general::{Payload, PayloadMut},
         vaes_cipher::{Nonce192, Vaes256CTR},
     },
-    memory::{
-        securevec::SecureVec,
-        sys_control::{disable_dump, lock_all_memory},
-        zeroize::Zeroizeable,
-    },
+    memory::{securevec::SecureVec, zeroize::Zeroizeable},
     ni_instructions::aesni::LoadRegister,
     rng::{HWChaCha20Rng, HardwareRNG},
 };
 
+#[test]
+fn cipher_test() {
+    println!("start");
+    for _ in 0..5 {
+        let mut buffer = vec![0u8; 1024 * 1024 * 1024];
+        let vaes = Aes256::new(&[0u8; 32]).unwrap();
+        vaes.encrypt_inplace(&mut buffer, Nonce96::generate_nonce(&mut HardwareRNG))
+            .unwrap();
+    }
+}
+
+#[test]
+fn memory_test() {
+    let mut buffer: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
+    buffer.fill(1).unwrap();
+
+    println!("{:?}", &buffer[..]);
+}
+
+#[test]
+fn decrypt_rejects_modified_tag() {
+    use crate::ciphers::aes_cipher::AesError;
+    use crate::ciphers::vaes_cipher::{Nonce192, Vaes256};
+
+    let key = [7u8; 32];
+    let vaes = Vaes256::new(&key).unwrap();
+    let nonce = Nonce192::generate_nonce(&mut HardwareRNG);
+    let mut msg = b"attack at dawn".to_vec();
+    let tag = vaes.encrypt_inplace(&mut msg, nonce).unwrap();
+
+    let mut bad_tag = tag;
+    bad_tag.as_mut_bytes()[0] ^= 0xFF;
+
+    match vaes.decrypt_inplace(&mut msg, nonce, &bad_tag) {
+        Err(AesError::AuthenticationFailed) => {}
+        other => panic!("beklenen AuthenticationFailed, ama {:?}", other),
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn general() {
+    use std::time::Instant;
+
     env_logger::init();
 
-    disable_dump();
-    lock_all_memory();
-
-    let mut data = vec![1u8; 1000];
+    let start = Instant::now();
+    let mut data = vec![1u8; 256];
     let mut key: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
-    key.fill_random(&mut HWChaCha20Rng::new().unwrap()).unwrap();
+    key.fill_random(&mut HWChaCha20Rng::new(true).unwrap())
+        .unwrap();
     let mut key2 = SecureVec::with_capacity(32).unwrap();
     key2.fill(0).unwrap();
     key2.copy_from_slice(&key);
@@ -31,6 +68,8 @@ fn general() {
     let test = Aes256CTR::new(&key).unwrap();
     let nonce = Nonce96::generate_nonce(&mut HardwareRNG);
     let mut output = test.encrypt(&data, nonce).unwrap();
+    test.encrypt_inplace(&mut data, nonce).unwrap();
+    println!("{:?}", data);
 
     let ctr = Vaes256CTR::new(&key).unwrap();
     let mut nonce2 = [0u8; 24];
@@ -38,7 +77,7 @@ fn general() {
     nonce2[12..].copy_from_slice(nonce.as_slice());
     let nonce = Nonce192::from_bytes(nonce2);
 
-    ctr.decrypt(&mut output, nonce).unwrap();
+    ctr.decrypt_inplace(&mut output, nonce).unwrap();
 
     key.zeroize();
     data.zeroize();
@@ -48,10 +87,11 @@ fn general() {
     let mut vec = SecureVec::with_capacity(256).unwrap();
     vec.extend_from_slice(&[0u32; 256]).unwrap();
 
-    let data = unsafe { vec![0u8; 16].load() };
+    let data = unsafe { vec![0u8; 16].load_128() };
     let mut data = vec![data; 1024 * 1024];
 
     data.zeroize();
+    println!("{:?}", start.elapsed())
 }
 
 use aes_gcm::{
@@ -102,7 +142,14 @@ fn compare_with_aes_gcm_with_aad_and_tails() {
         let msg = (0..len).map(|i| i as u8).collect::<Vec<u8>>();
 
         let out = ours
-            .encrypt_with_aad(&msg, Nonce96::from_bytes(nonce), aad)
+            .encrypt(
+                Payload {
+                    prefetch_mode: ciphers::general::PrefetchMode::Off,
+                    aad: aad,
+                    msg: &msg,
+                },
+                Nonce96::from_bytes(nonce),
+            )
             .unwrap();
         let (ct_ours, tag_ours) = out.split_at(out.len() - 16);
 
@@ -120,14 +167,28 @@ fn compare_with_aes_gcm_with_aad_and_tails() {
 
         // verify our decrypt_with_aad accepts ref output as well
         let dec = ours
-            .decrypt_with_aad(ref_out.clone(), Nonce96::from_bytes(nonce), aad)
+            .decrypt(
+                Payload {
+                    msg: &ref_out,
+                    aad: aad,
+                    prefetch_mode: ciphers::general::PrefetchMode::Off,
+                },
+                Nonce96::from_bytes(nonce),
+            )
             .unwrap();
         assert_eq!(dec, msg, "cross-decrypt failed len={len}");
 
         // inplace API cross-check
         let mut buf = msg.clone();
         let tag = ours
-            .encrypt_inplace_with_aad(&mut buf, Nonce96::from_bytes(nonce), aad)
+            .encrypt_inplace(
+                PayloadMut {
+                    prefetch_mode: ciphers::general::PrefetchMode::Off,
+                    msg: &mut buf,
+                    aad,
+                },
+                Nonce96::from_bytes(nonce),
+            )
             .unwrap();
         // build ct||tag like aes-gcm output
         let mut ours_concat = buf.clone();

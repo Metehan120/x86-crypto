@@ -4,6 +4,11 @@
 
 ---
 
+**Important Note**: Removed TLS support due to security concerns.
+**Small Note**: v0.2.0-alpha-2 still under development may cause bugs on some systems. Please report any issues to the author.
+
+---
+
 ## Features
 
 * **AES-CTR / AES-GCM** with AES-NI acceleration
@@ -12,7 +17,6 @@
 * **ChaCha20** with hardware RNG seeding
 * **SecureVec**: `mlock`-based, zeroing, capacity-checked secure allocator
 * **Hardware RNG**: RDRAND and RDSEED support
-* **TLS Handler** integration with `rustls`
 * **Constant-time comparisons** and side-channel resistance
 * **Cache control utilities** for security-sensitive operations
 * **Feature-gated modular design** — include only what you need
@@ -28,6 +32,10 @@
   - AMD Ryzen (Zen 1+)
   - Majority of tests performed on Ryzen 5 5600X & Ryzen 5 3600
   - Also verified on Ryzen 3 4100 & Ryzen 3 2200
+
+---
+
+**Disclaimer:** While this library follows best practices and passes standard test vectors, it has **not** undergone a formal third-party audit (e.g., NCC Group). Use at your own risk — the author accepts no responsibility for any outcome.
 
 ---
 
@@ -51,7 +59,7 @@ Benchmarks were run on **AMD Ryzen 5 5600X**, compiled with `--release`.
 | VAES-CTR  |  9.3         |
 | VAES-GCM  |  2.3         |
 | AES-CTR   |  4.6         |
-| AES-GCM   |  1.8         |
+| AES-GCM   |  2.2         |
 
 ---
 
@@ -60,7 +68,7 @@ Benchmarks were run on **AMD Ryzen 5 5600X**, compiled with `--release`.
 | Crate                      | Criterion (ms) | Relative Speed  |
 |----------------------------|----------------|-----------------|
 | aes-gcm                    | 57.6 ms        | baseline        |
-| x86-crypto (VAES & AES-NI) | 42.7 ms        | **~35% faster** |
+| x86-crypto (VAES & AES-NI, inplace) | 42.7 ms        | **~35% faster** |
 
 ---
 
@@ -91,7 +99,6 @@ fn main() {
 | `aes_cipher`        | AES-CTR and AES-ECB support                 |
 | `aes_gcm`           | AES-GCM mode (requires `aes_cipher`)        |
 | `vaes`              | VAES-based accelerated AES                  |
-| `tls`               | Enables TLS handler integration with rustls |
 | `all_aes`           | Enables all AES modes                       |
 | `compression_test`  | LZ4 compression benchmarks for testing      |
 | ...                 | And more                                    |
@@ -106,8 +113,6 @@ fn main() {
 * Secure memory allocator uses `mlock` and zeroization
 * GHASH implementation is provided by the `ghash` crate — any security issues in GHASH are outside the scope of this library
 * Verified against RFC and NIST test vectors, plus AES-GCM ↔ VAES-GCM cross-tests
-
-**Disclaimer:** While this library follows best practices and passes standard test vectors, it has **not** undergone a formal third-party audit (e.g., NCC Group). Use at your own risk — the author accepts no responsibility for any outcome.
 
 ---
 

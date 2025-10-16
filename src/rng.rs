@@ -7,6 +7,7 @@ use core::{
     ops::{Add, Bound, RangeBounds, Rem, Sub},
 };
 
+#[cfg(feature = "std")]
 use log::info;
 use num_traits::{One, Unsigned};
 use rand_chacha::ChaCha20Rng;
@@ -493,11 +494,15 @@ impl RngCore for HardwareRNG {
 pub struct HWChaCha20Rng(ChaCha20Rng);
 
 impl HWChaCha20Rng {
-    pub fn new() -> Result<Self, RngErrors> {
+    pub fn new(is_raw: bool) -> Result<Self, RngErrors> {
         #[cfg(feature = "audit-logs")]
         info!("Created RNG ChaCha20 instance");
         let mut seed = [0u8; 32];
-        HardwareRNG.try_fill_raw_by(&mut seed)?;
+        if is_raw {
+            HardwareRNG.try_fill_raw_by(&mut seed)?;
+        } else {
+            HardwareRNG.try_fill_by(&mut seed)?;
+        }
 
         Ok(Self(ChaCha20Rng::from_seed(seed)))
     }

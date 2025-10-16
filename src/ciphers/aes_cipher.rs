@@ -5,11 +5,8 @@ use core::{
 };
 
 use ghash::GHash;
-#[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-use log::trace;
-#[cfg(feature = "cipher_prefetch")]
-use log::warn;
 use log::{debug, error, info};
+use macros::stable_api;
 use rayon::{
     iter::{IndexedParallelIterator, ParallelIterator},
     slice::ParallelSliceMut,
@@ -17,7 +14,10 @@ use rayon::{
 use thiserror_no_std::Error;
 use universal_hash::{Key, KeyInit, UniversalHash};
 
+#[cfg(feature = "aes_gcm")]
+use crate::ciphers::general::PrefetchMode;
 use crate::{
+    ciphers::general::{Payload, PayloadMut},
     constant_time_ops,
     memory::zeroize::Zeroizeable,
     ni_instructions::aesni::{__rsi256keys, AES, AES_NI, LoadRegister, StoreRegister},
@@ -29,11 +29,14 @@ static NONCE_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-#[deprecated(since = "0.2.0", note = "Use [`Nonce96`] instead")]
-/// Will be removed in 0.3.0
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `Nonce96` instead. This type will be removed in 0.3.0."
+)]
 pub struct Nonce([u8; 12]);
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
+#[stable_api(since = "0.2.0")]
 pub struct Nonce96(pub [u8; 12]);
 
 macro_rules! impl_nonce {
@@ -166,6 +169,12 @@ impl Deref for Tag {
     }
 }
 
+impl Tag128 {
+    pub fn as_mut_bytes(&mut self) -> &mut [u8; 16] {
+        &mut self.0
+    }
+}
+
 impl_tag!(Tag);
 impl_tag!(Tag128);
 
@@ -244,149 +253,185 @@ pub struct Aes256CTR {
 }
 
 impl Aes256CTR {
-    pub fn new(key: &impl AsRef<[u8]>) -> Result<Self, AesError> {
-        if key.as_ref().len() != 32 {
-            return Err(AesError::InvalidPasswordLenght);
+    pub fn new<'aad>(key: &impl AsRef<[u8]>) -> Result<Self, AesError> {
+        if is_x86_feature_detected!("aes") {
+            if key.as_ref().len() != 32 {
+                return Err(AesError::InvalidPasswordLenght);
+            }
+
+            let key_registers = [unsafe { key.as_ref()[..16].load_128() }, unsafe {
+                key.as_ref()[16..].load_128()
+            }];
+            let round_keys = AES_NI.expand_aes256_key(key_registers);
+
+            Ok(Self { round_keys })
+        } else {
+            return Err(AesError::AesNiNotSupported);
         }
-
-        let key_registers = [unsafe { key.as_ref()[..16].load() }, unsafe {
-            key.as_ref()[16..].load()
-        }];
-        let round_keys = AES_NI.expand_aes256_key(key_registers);
-
-        Ok(Self { round_keys })
     }
 
+    #[inline(always)]
     fn encrypt_block(&self, plaintext: &[u8]) -> __m128i {
         let aes = AES_NI;
-        let block = unsafe { plaintext.load() };
+        let block = unsafe { plaintext.load_128() };
         aes.perform_aes256_rounds_block(&self.round_keys, block)
     }
 
-    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
-        assert_size_ok(src.as_ref().len(), 1)?;
+    pub fn encrypt<'aad, 'msg>(
+        &self,
+        payload: impl Into<Payload<'aad, 'msg>>,
+        nonce: Nonce96,
+    ) -> Result<Vec<u8>, AesError> {
+        let payload: Payload<'aad, 'msg> = payload.into();
+        assert_size_ok(payload.msg.len(), 1)?;
 
-        let mut data = src.as_ref().to_vec();
+        let mut data = payload.msg.to_vec();
 
-        let chunk_size = 16;
+        let chunk_size = 32;
         let tail_len = data.len() % chunk_size;
         let main_body_len = data.len() - tail_len;
 
         let (main_body, tail) = data.split_at_mut(main_body_len);
 
-        #[cfg(feature = "cipher_prefetch")]
-        warn!("Prefetch issued (speculative memory access – may affect cache side-channels)");
-
         main_body
-            .par_chunks_exact_mut(16)
+            .par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let mut iv = [0u8; 16];
+
+                payload.prefetch_mode.perform(nonce.as_slice());
+
                 iv[..12].copy_from_slice(&nonce.0);
-                iv[12..].copy_from_slice(&((i as u32).wrapping_add(1)).to_be_bytes());
+                iv[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(1)).to_be_bytes());
+
+                let mut iv2 = [0u8; 16];
+                iv2[..12].copy_from_slice(&nonce.0);
+                iv2[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(2)).to_be_bytes());
 
                 let encrypted_iv = self.encrypt_block(&iv);
+                let encrypted_iv2 = self.encrypt_block(&iv2);
 
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch started");
-                #[cfg(feature = "cipher_prefetch")]
-                unsafe {
-                    use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
-                }
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch completed");
+                let chunk_reg = unsafe { chunk[..16].load_128() };
+                let chunk_reg2 = unsafe { chunk[16..32].load_128() };
 
-                let chunk_reg = unsafe { chunk.load() };
                 let result = unsafe { _mm_xor_si128(encrypted_iv, chunk_reg) };
+                let result2 = unsafe { _mm_xor_si128(encrypted_iv2, chunk_reg2) };
 
                 unsafe {
                     _mm_storeu_si128(chunk.as_mut_ptr() as *mut __m128i, result);
-                }
+                    _mm_storeu_si128(chunk.as_mut_ptr().add(16) as *mut __m128i, result2);
+                };
             });
 
         if !tail.is_empty() {
-            let i = main_body.len() / chunk_size;
-            let mut iv = [0u8; 16];
-            iv[..12].copy_from_slice(&nonce.0);
-            iv[12..].copy_from_slice(&((i as u32).wrapping_add(1)).to_be_bytes());
+            let base = ((main_body.len() / chunk_size) as u32).wrapping_mul(2);
+            let mut offset = 0;
 
-            let keystream_block = self.encrypt_block(&iv);
-            let keystream_bytes = unsafe { keystream_block.store() };
+            while offset < tail.len() {
+                let mut iv = [0u8; 16];
+                iv[..12].copy_from_slice(&nonce.0);
+                iv[12..].copy_from_slice(&(base + 1 + (offset as u32 / 16)).to_be_bytes());
 
-            for j in 0..tail.len() {
-                tail[j] ^= keystream_bytes[j];
+                let keystream_block = self.encrypt_block(&iv);
+                let keystream_bytes = unsafe { keystream_block.store_128() };
+
+                let remaining = core::cmp::min(16, tail.len() - offset);
+                for j in 0..remaining {
+                    tail[offset + j] ^= keystream_bytes[j];
+                }
+
+                offset += 16;
             }
         }
 
         Ok(data)
     }
 
-    pub fn encrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<(), AesError> {
-        assert_size_ok(src_dst.as_mut().len(), 1)?;
+    pub fn encrypt_inplace<'aad, 'msg>(
+        &self,
+        payload: impl Into<PayloadMut<'aad, 'msg>>,
+        nonce: Nonce96,
+    ) -> Result<(), AesError> {
+        let payload: PayloadMut<'aad, 'msg> = payload.into();
+        assert_size_ok(payload.msg.len(), 1)?;
 
-        let chunk_size = 16;
-        let tail_len = src_dst.as_mut().len() % chunk_size;
-        let main_body_len = src_dst.as_mut().len() - tail_len;
+        let chunk_size = 32;
+        let tail_len = payload.msg.len() % chunk_size;
+        let main_body_len = payload.msg.len() - tail_len;
 
-        let (main_body, tail) = src_dst.as_mut().split_at_mut(main_body_len);
-
-        #[cfg(feature = "cipher_prefetch")]
-        warn!("Prefetch issued (speculative memory access – may affect cache side-channels)");
+        let (main_body, tail) = payload.msg.split_at_mut(main_body_len);
 
         main_body
-            .as_mut()
-            .par_chunks_exact_mut(16)
+            .par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let mut iv = [0u8; 16];
+
+                payload.prefetch_mode.perform(nonce.as_slice());
+
                 iv[..12].copy_from_slice(&nonce.0);
-                iv[12..].copy_from_slice(&((i as u32).wrapping_add(1)).to_be_bytes());
+                iv[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(1)).to_be_bytes());
+
+                let mut iv2 = [0u8; 16];
+                iv2[..12].copy_from_slice(&nonce.0);
+                iv2[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(2)).to_be_bytes());
 
                 let encrypted_iv = self.encrypt_block(&iv);
+                let encrypted_iv2 = self.encrypt_block(&iv2);
 
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch started");
-                #[cfg(feature = "cipher_prefetch")]
-                unsafe {
-                    use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
-                }
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch completed");
+                let chunk_reg = unsafe { chunk[..16].load_128() };
+                let chunk_reg2 = unsafe { chunk[16..32].load_128() };
 
-                let chunk_reg = unsafe { chunk.load() };
                 let result = unsafe { _mm_xor_si128(encrypted_iv, chunk_reg) };
+                let result2 = unsafe { _mm_xor_si128(encrypted_iv2, chunk_reg2) };
 
                 unsafe {
                     _mm_storeu_si128(chunk.as_mut_ptr() as *mut __m128i, result);
-                }
+                    _mm_storeu_si128(chunk.as_mut_ptr().add(16) as *mut __m128i, result2);
+                };
             });
 
         if !tail.is_empty() {
-            let i = main_body.len() / chunk_size;
-            let mut iv = [0u8; 16];
-            iv[..12].copy_from_slice(&nonce.0);
-            iv[12..].copy_from_slice(&((i as u32).wrapping_add(1)).to_be_bytes());
+            let base = ((main_body.len() / chunk_size) as u32).wrapping_mul(2);
+            let mut offset = 0;
 
-            let keystream_block = self.encrypt_block(&iv);
-            let keystream_bytes = unsafe { keystream_block.store() };
+            while offset < tail.len() {
+                let mut iv = [0u8; 16];
+                iv[..12].copy_from_slice(&nonce.0);
+                iv[12..].copy_from_slice(&(base + 1 + (offset as u32 / 16)).to_be_bytes());
 
-            for j in 0..tail.len() {
-                tail[j] ^= keystream_bytes[j];
+                let keystream_block = self.encrypt_block(&iv);
+                let keystream_bytes = unsafe { keystream_block.store_128() };
+
+                let remaining = core::cmp::min(16, tail.len() - offset);
+                for j in 0..remaining {
+                    tail[offset + j] ^= keystream_bytes[j];
+                }
+
+                offset += 16;
             }
         }
 
         Ok(())
     }
 
-    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
+    pub fn decrypt<'aad, 'msg>(
+        &self,
+        src: impl Into<Payload<'aad, 'msg>>,
+        nonce: Nonce96,
+    ) -> Result<Vec<u8>, AesError> {
         self.encrypt(src, nonce)
     }
 
-    pub fn decrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<(), AesError> {
+    pub fn decrypt_inplace<'aad, 'msg>(
+        &self,
+        src_dst: impl Into<PayloadMut<'aad, 'msg>>,
+        nonce: Nonce96,
+    ) -> Result<(), AesError> {
         self.encrypt_inplace(src_dst, nonce)
     }
 }
@@ -441,86 +486,107 @@ pub struct Aes256 {
 #[cfg(feature = "aes_gcm")]
 impl Aes256 {
     pub fn new(key: &impl AsRef<[u8]>) -> Result<Self, AesError> {
-        if key.as_ref().len() != 32 {
-            error!(
-                "AES-GCM initialization failed: Invalid key length (got {})",
-                key.as_ref().len()
-            );
+        if is_x86_feature_detected!("aes") {
+            if key.as_ref().len() != 32 {
+                error!(
+                    "AES-GCM initialization failed: Invalid key length (got {})",
+                    key.as_ref().len()
+                );
 
-            return Err(AesError::InvalidPasswordLenght);
+                return Err(AesError::InvalidPasswordLenght);
+            }
+
+            #[cfg(feature = "audit-logs")]
+            info!("AES-GCM Instance created");
+
+            let key_registers = [unsafe { key.as_ref()[..16].load_128() }, unsafe {
+                key.as_ref()[16..].load_128()
+            }];
+            let round_keys = AES_NI.expand_aes256_key(key_registers);
+
+            Ok(Self { round_keys })
+        } else {
+            return Err(AesError::AesNiNotSupported);
         }
-
-        #[cfg(feature = "audit-logs")]
-        info!("AES-GCM Instance created");
-
-        let key_registers = [unsafe { key.as_ref()[..16].load() }, unsafe {
-            key.as_ref()[16..].load()
-        }];
-        let round_keys = AES_NI.expand_aes256_key(key_registers);
-
-        Ok(Self { round_keys })
     }
 
+    #[inline(always)]
     fn encrypt_block(&self, plaintext: &[u8]) -> __m128i {
         let aes = AES_NI;
-        let block = unsafe { plaintext.load() };
+        let block = unsafe { plaintext.load_128() };
         aes.perform_aes256_rounds_block(&self.round_keys, block)
     }
 
-    fn ctr_inplace(&self, src: &mut [u8], nonce: &Nonce96) -> Result<(), AesError> {
+    fn ctr_inplace(
+        &self,
+        src: &mut [u8],
+        nonce: &Nonce96,
+        prefetch: PrefetchMode,
+    ) -> Result<(), AesError> {
         assert_size_ok(src.len(), 2)?;
 
-        let chunk_size = 16;
+        let chunk_size = 32;
         let tail_len = src.len() % chunk_size;
         let main_body_len = src.len() - tail_len;
 
         let (main_body, tail) = src.split_at_mut(main_body_len);
-
-        #[cfg(feature = "cipher_prefetch")]
-        warn!("Prefetch issued (speculative memory access – may affect cache side-channels)");
 
         main_body
             .par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let mut iv = [0u8; 16];
-                iv[..12].copy_from_slice(&nonce.0);
-                iv[12..].copy_from_slice(&((i as u32).wrapping_add(2)).to_be_bytes());
 
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch started");
-                #[cfg(feature = "cipher_prefetch")]
-                unsafe {
-                    use core::arch::x86_64::{_MM_HINT_T0, _MM_HINT_T1, _mm_prefetch};
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(chunk.as_ptr() as *const i8, _MM_HINT_T1);
-                }
-                #[cfg(all(feature = "cipher_prefetch", feature = "cipher-prefetch-warn"))]
-                trace!("Prefetch completed");
+                prefetch.perform(nonce.as_slice());
+
+                iv[..12].copy_from_slice(&nonce.0);
+                iv[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(2)).to_be_bytes());
+
+                let mut iv2 = [0u8; 16];
+                iv2[..12].copy_from_slice(&nonce.0);
+                iv2[12..]
+                    .copy_from_slice(&((i as u32).wrapping_mul(2).wrapping_add(3)).to_be_bytes());
 
                 let encrypted_iv = self.encrypt_block(&iv);
-                let chunk_reg = unsafe { chunk.load() };
-                let result = unsafe { _mm_xor_si128(encrypted_iv, chunk_reg) };
+                let encrypted_iv2 = self.encrypt_block(&iv2);
 
-                unsafe { _mm_storeu_si128(chunk.as_mut_ptr() as *mut __m128i, result) };
+                let chunk_reg = unsafe { chunk[..16].load_128() };
+                let chunk_reg2 = unsafe { chunk[16..32].load_128() };
+
+                let result = unsafe { _mm_xor_si128(encrypted_iv, chunk_reg) };
+                let result2 = unsafe { _mm_xor_si128(encrypted_iv2, chunk_reg2) };
+
+                unsafe {
+                    _mm_storeu_si128(chunk.as_mut_ptr() as *mut __m128i, result);
+                    _mm_storeu_si128(chunk.as_mut_ptr().add(16) as *mut __m128i, result2);
+                };
             });
 
         if !tail.is_empty() {
-            let i = main_body.len() / chunk_size;
-            let mut iv = [0u8; 16];
-            iv[..12].copy_from_slice(&nonce.0);
-            iv[12..].copy_from_slice(&((i as u32).wrapping_add(2)).to_be_bytes());
+            let base = ((main_body.len() / chunk_size) as u32).wrapping_mul(2);
+            let mut offset = 0;
 
-            let keystream_block = self.encrypt_block(&iv);
-            let keystream_bytes = unsafe { keystream_block.store() };
+            while offset < tail.len() {
+                let mut iv = [0u8; 16];
+                iv[..12].copy_from_slice(&nonce.0);
+                iv[12..].copy_from_slice(&(base + 2 + (offset as u32 / 16)).to_be_bytes());
 
-            for j in 0..tail.len() {
-                tail[j] ^= keystream_bytes[j];
+                let keystream_block = self.encrypt_block(&iv);
+                let keystream_bytes = unsafe { keystream_block.store_128() };
+
+                let remaining = core::cmp::min(16, tail.len() - offset);
+                for j in 0..remaining {
+                    tail[offset + j] ^= keystream_bytes[j];
+                }
+
+                offset += 16;
             }
         }
 
         #[cfg(feature = "audit-logs")]
         info!("AES-CTR encryption performed on {} bytes", src.len());
+        #[cfg(feature = "audit-logs")]
         debug!("Chunked: {} bytes, Tail: {} bytes", main_body_len, tail_len);
 
         Ok(())
@@ -530,7 +596,7 @@ impl Aes256 {
         use crate::CycleTimer;
 
         let mut cycle = CycleTimer::new();
-        let auth_key = unsafe { self.encrypt_block(&[0u8; 16]).store() };
+        let auth_key = unsafe { self.encrypt_block(&[0u8; 16]).store_128() };
         let mut ghash = GHash::new(Key::<GHash>::from_slice(&auth_key));
         ghash.update_padded(&aad);
         ghash.update_padded(&data);
@@ -545,7 +611,7 @@ impl Aes256 {
         let mut tag_block = [0u8; 16];
         tag_block[..12].copy_from_slice(&nonce);
         tag_block[12..].copy_from_slice(&1u32.to_be_bytes());
-        let encrypted_counter = unsafe { self.encrypt_block(&tag_block).store() };
+        let encrypted_counter = unsafe { self.encrypt_block(&tag_block).store_128() };
 
         let mut final_tag = [0u8; 16];
         for i in 0..16 {
@@ -561,20 +627,19 @@ impl Aes256 {
         final_tag
     }
 
-    pub fn encrypt_with_aad<T: AsRef<[u8]>>(
+    pub fn encrypt<'aad, 'msg>(
         &self,
-        src: T,
+        payload: impl Into<Payload<'aad, 'msg>>,
         nonce: Nonce96,
-        aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
-        use crate::memory::zeroize::Zeroizeable;
+        let payload: Payload<'aad, 'msg> = payload.into();
 
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM encryption");
-        let mut data = src.as_ref().to_vec();
-        self.ctr_inplace(&mut data, &nonce)?;
+        let mut data = payload.msg.to_vec();
+        self.ctr_inplace(&mut data, &nonce, payload.prefetch_mode)?;
 
-        let mut final_tag = self.compute_tag(aad, nonce.0, &data);
+        let mut final_tag = self.compute_tag(payload.aad, nonce.0, &data);
 
         data.extend(final_tag);
         #[cfg(feature = "audit-logs")]
@@ -585,38 +650,30 @@ impl Aes256 {
         Ok(data)
     }
 
-    pub fn encrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
-        self.encrypt_with_aad(src, nonce, &[])
-    }
-
-    pub fn encrypt_inplace_with_aad(
+    pub fn encrypt_inplace<'aad, 'msg>(
         &self,
-        src_dst: &mut [u8],
+        payload: impl Into<PayloadMut<'aad, 'msg>>,
         nonce: Nonce96,
-        aad: &[u8],
     ) -> Result<Tag128, AesError> {
+        let payload: PayloadMut<'aad, 'msg> = payload.into();
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM encryption");
-        self.ctr_inplace(src_dst.as_mut(), &nonce)?;
-        let tag = self.compute_tag(aad, nonce.0, src_dst.as_mut());
+        self.ctr_inplace(payload.msg, &nonce, payload.prefetch_mode)?;
+        let tag = self.compute_tag(payload.aad, nonce.0, &payload.msg);
         #[cfg(feature = "audit-logs")]
         info!("GCM encryption completed");
         Ok(Tag128::from_array(tag))
     }
 
-    pub fn encrypt_inplace(&self, src_dst: &mut [u8], nonce: Nonce96) -> Result<Tag128, AesError> {
-        self.encrypt_inplace_with_aad(src_dst, nonce, &[])
-    }
-
-    pub fn decrypt_with_aad<T: AsRef<[u8]>>(
+    pub fn decrypt<'aad, 'msg>(
         &self,
-        src: T,
+        payload: impl Into<Payload<'aad, 'msg>>,
         nonce: Nonce96,
-        aad: &[u8],
     ) -> Result<Vec<u8>, AesError> {
         use crate::memory::zeroize::Zeroizeable;
+        let payload: Payload<'aad, 'msg> = payload.into();
 
-        let data = src.as_ref();
+        let data = payload.msg;
         if data.len() < 16 {
             return Err(AesError::InvalidLength);
         }
@@ -627,7 +684,7 @@ impl Aes256 {
         let (ciphertext, received_tag) = data.split_at(data.len() - 16);
         let mut ciphertext = ciphertext.to_vec();
 
-        let mut computed_tag = self.compute_tag(aad, nonce.0, &ciphertext);
+        let mut computed_tag = self.compute_tag(payload.aad, nonce.0, &ciphertext);
         if constant_time_ops::compare_bytes(&received_tag, &computed_tag) == 0 {
             use crate::memory::zeroize::Zeroizeable;
 
@@ -644,25 +701,21 @@ impl Aes256 {
         #[cfg(feature = "audit-logs")]
         info!("GCM decryption completed");
 
-        self.ctr_inplace(&mut ciphertext, &nonce)?;
+        self.ctr_inplace(&mut ciphertext, &nonce, payload.prefetch_mode)?;
         Ok(ciphertext)
     }
 
-    pub fn decrypt<T: AsRef<[u8]>>(&self, src: T, nonce: Nonce96) -> Result<Vec<u8>, AesError> {
-        self.decrypt_with_aad(src, nonce, &[])
-    }
-
-    pub fn decrypt_inplace_with_tag_aad(
+    pub fn decrypt_inplace<'aad, 'msg>(
         &self,
-        src_dst: &mut [u8],
+        payload: impl Into<PayloadMut<'aad, 'msg>>,
         nonce: Nonce96,
-        aad: &[u8],
         tag: Tag128,
     ) -> Result<(), AesError> {
         #[cfg(feature = "audit-logs")]
         info!("Starting GCM decryption");
+        let payload: PayloadMut<'aad, 'msg> = payload.into();
 
-        let mut computed_tag = self.compute_tag(aad, nonce.0, src_dst.as_mut());
+        let mut computed_tag = self.compute_tag(payload.aad, nonce.0, payload.msg);
         if constant_time_ops::compare_bytes(tag.as_bytes(), &computed_tag) == 0 {
             #[cfg(feature = "dev-logs")]
             debug!("Expected tag: {:02x?}", computed_tag);
@@ -677,15 +730,6 @@ impl Aes256 {
         #[cfg(feature = "audit-logs")]
         info!("GCM decryption completed");
 
-        self.ctr_inplace(src_dst.as_mut(), &nonce)
-    }
-
-    pub fn decrypt_inplace_with_tag(
-        &self,
-        src: &mut [u8],
-        nonce: Nonce96,
-        tag: Tag128,
-    ) -> Result<(), AesError> {
-        self.decrypt_inplace_with_tag_aad(src, nonce, &[], tag)
+        self.ctr_inplace(payload.msg, &nonce, payload.prefetch_mode)
     }
 }

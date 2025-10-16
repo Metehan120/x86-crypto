@@ -10,6 +10,8 @@ use core::{
     ops::Deref,
 };
 
+use macros::assert_sizes;
+
 #[cfg(feature = "dev-logs")]
 use log::warn;
 
@@ -37,12 +39,14 @@ types! {
 
 types! {
     #[derive(Debug, Clone, Copy)]
+    #[assert_sizes(32)]
     /// A type-safe wrapper for a `__m256i` value, representing a 256-bit data block
     /// for an AES operation.
     type __vaes256i: __m256i;
     impl deref __vaes256i, __m256i
 
     #[derive(Debug, Clone, Copy)]
+    #[assert_sizes(32)]
     /// A type-safe wrapper for a `__m256i` value, representing a 256-bit round key
     /// for a single AES round.
     type __vaes256key: __m256i;
@@ -50,6 +54,14 @@ types! {
 }
 
 impl __vaes256i {
+    #[inline(always)]
+    pub fn as_mm256i(&self) -> __m256i {
+        self.0
+    }
+}
+
+impl __vaes256key {
+    #[inline(always)]
     pub fn as_mm256i(&self) -> __m256i {
         self.0
     }
@@ -170,6 +182,7 @@ pub fn make_dec_keys_128(rk_enc: &[__m128i; 15]) -> [__m128i; 15] {
 #[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesenc_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
+
     unsafe {
         asm!(
             "vaesenc {0}, {0}, {1}",
@@ -207,6 +220,7 @@ pub unsafe fn vaesdec_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes25
 #[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesenc_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
+
     unsafe {
         asm!(
             "vaesenclast {0}, {0}, {1}",
@@ -225,6 +239,7 @@ pub unsafe fn vaesenc_last_asm(data: __vaes256i, round_key: __vaes256key) -> __v
 #[target_feature(enable = "vaes,avx2")]
 pub unsafe fn vaesdec_last_asm(data: __vaes256i, round_key: __vaes256key) -> __vaes256i {
     let mut result = data.0;
+
     unsafe {
         asm!(
             "vaesdeclast {0}, {0}, {1}",

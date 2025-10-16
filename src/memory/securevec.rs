@@ -1,21 +1,53 @@
 use core::{
+    cell::UnsafeCell,
     fmt::{self},
+    marker::PhantomData,
     ops::{BitOrAssign, BitXor},
     sync::atomic::compiler_fence,
 };
-use std::alloc::{GlobalAlloc, Layout};
+use std::{
+    alloc::{GlobalAlloc, Layout},
+    os::raw::c_void,
+};
 
+use bytemuck::Pod;
+use hmac::{Hmac, Mac};
+use libc::explicit_bzero;
 #[cfg(any(feature = "debug-alloc", feature = "dev-logs"))]
 use log::debug;
 use log::{error, warn};
 #[cfg(feature = "debug-alloc")]
 use log::{info, trace};
 use num_traits::Zero;
+use sha2::Sha256;
+use thiserror_no_std::Error;
+#[cfg(feature = "tpm-mem")]
+use tss_esapi::{
+    Context,
+    attributes::ObjectAttributes,
+    handles::KeyHandle,
+    interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm},
+        key_bits::RsaKeyBits,
+        resource_handles::Hierarchy,
+    },
+    structures::{
+        CreateKeyResult, Digest, KeyedHashScheme, PublicBuilder, PublicKeyRsa,
+        PublicKeyedHashParameters, PublicRsaParametersBuilder, RsaExponent, SensitiveData,
+    },
+    tcti_ldr::DeviceConfig,
+};
 
 use crate::{
+    constant_time_ops,
     memory::allocator::{AllocatorError, SECURE_ALLOC, SecureAllocErrorCode},
-    rng::{CryptoRNG, HardwareRandomizable},
+    rng::{CryptoRNG, HardwareRNG, HardwareRandomizable},
 };
+
+#[cfg(feature = "tpm-mem")]
+use crate::memory::securevec_traits::SecureVecTransform;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// High-performance secure memory container with automatic zeroization and constant time operations
 ///
@@ -80,9 +112,12 @@ pub struct SecureVec<T> {
     len: usize,
     cap: usize,
     is_dropped: bool,
+    integrity_key: [u8; 32],
+    pub integrity_tag: [u8; 32],
+    _phantom: PhantomData<UnsafeCell<T>>,
 }
 
-impl<T> SecureVec<T> {
+impl<T: Pod> SecureVec<T> {
     pub fn with_capacity(cap: usize) -> Result<Self, AllocatorError> {
         if cap == 0 {
             return Err(AllocatorError::NullCapacity(
@@ -104,11 +139,18 @@ impl<T> SecureVec<T> {
             raw_ptr as *mut T
         };
 
+        let mut integrity_key = [0u8; 32];
+        let integrity_tag = [0u8; 32];
+        HardwareRNG.fill_by_unchecked(&mut integrity_key);
+
         Ok(SecureVec {
             ptr,
             len: 0,
             cap,
             is_dropped: false,
+            integrity_key,
+            integrity_tag,
+            _phantom: PhantomData,
         })
     }
 
@@ -231,51 +273,20 @@ impl<T> SecureVec<T> {
         }
     }
 
-    pub unsafe fn explicit_as_slice(&self) -> &[T] {
-        if self.ptr.is_null() || self.is_dropped {
-            panic!("Attempted to reference a dropped SecureVec.explicit_as_slice()
-                                                     |
-                Which will cause memory corruption or even memory leaks | possibly heartbleed - Fatal Error");
-        }
-
-        #[cfg(feature = "debug-alloc")]
-        warn!("Accessing SecureVec content via explicit_as_slice()");
-
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    pub unsafe fn explicit_grow(&mut self, additional_capacity: usize) {
-        if self.ptr.is_null() || self.is_dropped {
-            panic!("Attempted to grow a dropped SecureVec - Fatal Error");
-        }
-
-        #[cfg(feature = "debug-alloc")]
-        warn!(
-            "Growing SecureVec by additional capacity: {}",
-            additional_capacity
-        );
-
-        let new_cap = self.cap + additional_capacity;
-        let new_layout = Layout::array::<T>(new_cap).expect("Cannot Create Layout");
-        let old_layout = Layout::array::<T>(self.cap).expect("Cannot Create Layout");
-
-        unsafe {
-            let new_ptr = SECURE_ALLOC.alloc(new_layout) as *mut T;
-
-            if !new_ptr.is_null() {
-                std::ptr::copy_nonoverlapping(self.ptr, new_ptr, self.len);
-
-                for i in 0..self.len {
-                    std::ptr::write(self.ptr.add(i), std::mem::zeroed::<T>());
-                }
-
-                SECURE_ALLOC.dealloc(self.ptr as *mut u8, old_layout);
-
-                self.ptr = new_ptr;
-                self.cap = new_cap;
+    unstable!(
+        pub unsafe fn explicit_as_slice(&self) -> &[T] {
+            if self.ptr.is_null() || self.is_dropped {
+                panic!("Attempted to reference a dropped SecureVec.explicit_as_slice()
+                                                         |
+                    Which will cause memory corruption or even memory leaks | possibly heartbleed - Fatal Error");
             }
+
+            #[cfg(feature = "debug-alloc")]
+            warn!("Accessing SecureVec content via explicit_as_slice()");
+
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
         }
-    }
+    );
 }
 
 impl<T> Drop for SecureVec<T> {
@@ -291,6 +302,10 @@ impl<T> Drop for SecureVec<T> {
                 SECURE_ALLOC.dealloc(self.ptr as *mut u8, layout);
                 compiler_fence(core::sync::atomic::Ordering::SeqCst);
             }
+
+            unsafe { explicit_bzero(self.integrity_key.as_ptr() as *mut c_void, 32) };
+            unsafe { explicit_bzero(self.integrity_tag.as_ptr() as *mut c_void, 32) };
+
             self.ptr = std::ptr::null_mut();
             self.is_dropped = true;
         }
@@ -410,5 +425,283 @@ impl<'a, T> IntoIterator for &'a SecureVec<T> {
             );
         }
         self.iter()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TpmErrors {
+    #[error("TPM Seal Failed: {0}")]
+    SecurityViolation(String),
+}
+
+#[cfg(feature = "tpm-mem")]
+pub struct SecureSealedHandler {
+    pub key_handle: KeyHandle,
+    pub create_key_result: CreateKeyResult,
+    pub context: Context,
+    cleaned_up: bool,
+}
+
+#[cfg(feature = "tpm-mem")]
+impl Drop for SecureSealedHandler {
+    fn drop(&mut self) {
+        if !self.cleaned_up {
+            match self.context.flush_context(self.key_handle.into()) {
+                Ok(_) => {
+                    #[cfg(feature = "debug-alloc")]
+                    info!("TPM context flushed successfully");
+                    self.cleaned_up = true;
+                }
+                Err(e) => {
+                    error!("CRITICAL: Failed to flush TPM context: {:?}", e);
+                    error!("TPM key handle may still be resident on TPM");
+                    error!("Manual intervention may be required to clear TPM state");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "tpm-mem")]
+impl SecureSealedHandler {
+    pub fn cleanup(mut self) -> Result<(), TpmErrors> {
+        if !self.cleaned_up {
+            match self.context.flush_context(self.key_handle.into()) {
+                Ok(_) => {
+                    #[cfg(feature = "debug-alloc")]
+                    info!("TPM context flushed successfully");
+                    self.cleaned_up = true;
+                    Ok(())
+                }
+                Err(e) => Err(TpmErrors::SecurityViolation(format!(
+                    "TPM flush failed: {}",
+                    e
+                ))),
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "tpm-mem")]
+impl SecureVec<u8> {
+    /// Seals data to TPM 2.0 chip using Storage Root Key (SRK)
+    ///
+    /// # Security
+    /// - Data is encrypted and bound to this specific TPM
+    /// - Maximum 128 bytes can be sealed directly
+    /// - Original SecureVec is zeroized after sealing
+    ///
+    /// # Panics
+    /// Panics if TPM device is unavailable or access denied
+    pub fn seal(&mut self, bigger_tpm: Option<u16>) -> Result<SecureSealedHandler, TpmErrors> {
+        let max_size = bigger_tpm.unwrap_or(128);
+
+        if self.len > max_size as usize {
+            return Err(TpmErrors::SecurityViolation(format!(
+                "Data too large for TPM seal: {} bytes (max {})",
+                self.len, max_size
+            )));
+        }
+
+        let mut ct = Context::new(tss_esapi::TctiNameConf::Device(DeviceConfig::default()))
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let rsa_params = PublicRsaParametersBuilder::new_restricted_decryption_key(
+            tss_esapi::structures::SymmetricDefinitionObject::Aes {
+                key_bits: tss_esapi::interface_types::key_bits::AesKeyBits::Aes256,
+                mode: tss_esapi::interface_types::algorithm::SymmetricMode::Cfb,
+            },
+            RsaKeyBits::Rsa2048,
+            RsaExponent::ZERO_EXPONENT,
+        )
+        .build()
+        .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let attr = ObjectAttributes::builder()
+            .with_fixed_tpm(true)
+            .with_fixed_parent(true)
+            .with_sensitive_data_origin(true)
+            .with_user_with_auth(true)
+            .with_restricted(true) // SRK bunu ister
+            .with_decrypt(true)
+            .with_sign_encrypt(false)
+            .build()
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let public = PublicBuilder::new()
+            .with_public_algorithm(PublicAlgorithm::Rsa)
+            .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+            .with_rsa_parameters(rsa_params)
+            .with_object_attributes(attr)
+            .with_rsa_unique_identifier(PublicKeyRsa::new_empty_with_size(RsaKeyBits::Rsa2048))
+            .build()
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let pr = ct
+            .execute_with_nullauth_session(|ctx| {
+                ctx.create_primary(Hierarchy::Owner, public.clone(), None, None, None, None)
+            })
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let sensitive = SensitiveData::try_from(self.as_ref())
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let seal_attr = ObjectAttributes::builder()
+            .with_fixed_tpm(true)
+            .with_fixed_parent(true)
+            .with_user_with_auth(true)
+            .with_no_da(true) // Dictionary attack protection
+            .build()
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let public = PublicBuilder::new()
+            .with_public_algorithm(PublicAlgorithm::KeyedHash)
+            .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+            .with_object_attributes(seal_attr)
+            .with_keyed_hash_parameters(PublicKeyedHashParameters::new(KeyedHashScheme::Null))
+            .with_keyed_hash_unique_identifier(Digest::default())
+            .build()
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let out = ct
+            .execute_with_nullauth_session(|ctx| {
+                ctx.create(pr.key_handle, public, None, Some(sensitive), None, None)
+            })
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        self.zeroize();
+        Ok(SecureSealedHandler {
+            context: ct,
+            key_handle: pr.key_handle,
+            create_key_result: out,
+            cleaned_up: false,
+        })
+    }
+
+    /// Unseals data from TPM 2.0 chip
+    ///
+    /// # Security
+    /// - Data can only be unsealed on the same TPM that sealed it
+    /// - Consumes the SecureSealedHandler (single-use)
+    pub fn unseal(mut sealed: SecureSealedHandler) -> Result<SecureVec<u8>, TpmErrors> {
+        let sealed_handler = sealed
+            .context
+            .execute_with_nullauth_session(|ctx| {
+                ctx.load(
+                    sealed.key_handle,
+                    sealed.create_key_result.out_private.clone(),
+                    sealed.create_key_result.out_public.clone(),
+                )
+            })
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        let unsealed = sealed
+            .context
+            .execute_with_nullauth_session(|ctx| ctx.unseal(sealed_handler.into()))
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        sealed
+            .context
+            .flush_context(sealed_handler.into())
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+
+        Ok(unsealed
+            .to_secure_vec(unsealed.len())
+            .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?)
+    }
+}
+
+impl<T: Pod> SecureVec<T> {
+    fn compute_hmac(&self) -> Result<[u8; 32], AllocatorError> {
+        if self.is_dropped {
+            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
+            return Err(AllocatorError::AlreadyDropped(
+                SecureAllocErrorCode::AlreadyDropped,
+            ));
+        }
+
+        let mut mac = HmacSha256::new_from_slice(&self.integrity_key)
+            .map_err(|_| AllocatorError::MacInitFailed)?;
+
+        unsafe {
+            let data = std::slice::from_raw_parts(
+                self.ptr as *const u8,
+                self.len * std::mem::size_of::<T>(),
+            );
+            mac.update(data);
+        }
+
+        Ok(mac.finalize().into_bytes().into())
+    }
+
+    fn compute_hmac_key(&self, key: &[u8]) -> Result<[u8; 32], AllocatorError> {
+        if self.is_dropped {
+            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
+            return Err(AllocatorError::AlreadyDropped(
+                SecureAllocErrorCode::AlreadyDropped,
+            ));
+        }
+
+        let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AllocatorError::MacInitFailed)?;
+
+        unsafe {
+            let data = std::slice::from_raw_parts(
+                self.ptr as *const u8,
+                self.len * std::mem::size_of::<T>(),
+            );
+            mac.update(data);
+        }
+
+        Ok(mac.finalize().into_bytes().into())
+    }
+
+    pub fn seal_integrity_with_key(&mut self, key: &[u8]) -> Result<(), AllocatorError> {
+        self.integrity_tag = self.compute_hmac_key(key)?;
+        Ok(())
+    }
+
+    pub fn seal_integrity(&mut self) -> Result<(), AllocatorError> {
+        self.integrity_tag = self.compute_hmac()?;
+        Ok(())
+    }
+
+    pub fn verify_sealed_integrity(&self) -> Result<(), AllocatorError> {
+        if self.is_dropped {
+            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
+            return Err(AllocatorError::AlreadyDropped(
+                SecureAllocErrorCode::AlreadyDropped,
+            ));
+        }
+
+        let current = self.compute_hmac()?;
+
+        if constant_time_ops::compare_bytes(&current, &self.integrity_tag) != 1 {
+            error!("Integrity check failed for SecureVec");
+            return Err(AllocatorError::LockFailed(
+                SecureAllocErrorCode::CorruptionDetected,
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn verify_sealed_integrity_with_key(&self, key: &[u8]) -> Result<(), AllocatorError> {
+        if self.is_dropped {
+            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
+            return Err(AllocatorError::AlreadyDropped(
+                SecureAllocErrorCode::AlreadyDropped,
+            ));
+        }
+
+        let current = self.compute_hmac_key(key)?;
+
+        if constant_time_ops::compare_bytes(&current, &self.integrity_tag) != 1 {
+            error!("Integrity check failed for SecureVec");
+            return Err(AllocatorError::LockFailed(
+                SecureAllocErrorCode::CorruptionDetected,
+            ));
+        }
+        Ok(())
     }
 }

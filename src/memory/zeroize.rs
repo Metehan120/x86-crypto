@@ -63,7 +63,7 @@ pub fn zeroize_func<T>(data: &mut [T]) {
 
 #[inline(never)]
 pub fn rand_zeroize_func<T: HardwareRandomizable>(data: &mut [T]) -> Result<(), RngErrors> {
-    let mut chacha = HWChaCha20Rng::new()?;
+    let mut chacha = HWChaCha20Rng::new(false)?;
     chacha.fill_by_unchecked(data);
 
     unsafe {
@@ -80,7 +80,7 @@ pub fn rand_zeroize_func<T: HardwareRandomizable>(data: &mut [T]) -> Result<(), 
 
 #[inline(never)]
 pub fn rand_zeroize_unchecked_func<T: HardwareRandomizable>(data: &mut [T]) {
-    let mut chacha = HWChaCha20Rng::new().expect("Failed to create ChaCha instance");
+    let mut chacha = HWChaCha20Rng::new(false).expect("Failed to create ChaCha instance");
     chacha.fill_by_unchecked(data);
 
     unsafe {
@@ -108,7 +108,6 @@ pub fn avx2_zeroize<T>(data: &mut [T]) {
     let chunk_size = 160 / core::mem::size_of::<T>();
     let tail_len = data.len() % chunk_size;
     let main_body_len = data.len() - tail_len;
-    assert!(160 % elem_size == 0, "T must divide 160 bytes evenly");
     let stride = 32 / elem_size;
 
     let (main_body, tail) = data.split_at_mut(main_body_len);
@@ -149,7 +148,6 @@ pub fn sse_zeroize<T>(data: &mut [T]) {
     let chunk_size = 80 / core::mem::size_of::<T>();
     let tail_len = data.len() % chunk_size;
     let main_body_len = data.len() - tail_len;
-    assert!(80 % elem_size == 0, "T must divide 80 bytes evenly");
     let stride = 16 / elem_size;
 
     let (main_body, tail) = data.split_at_mut(main_body_len);
@@ -181,6 +179,7 @@ pub fn sse_zeroize<T>(data: &mut [T]) {
     }
 }
 
+#[cfg(feature = "std")]
 pub fn zeroize_auto<T>(buf: &mut [T]) {
     if is_x86_feature_detected!("avx2") {
         unsafe { avx2_zeroize(buf) }
@@ -189,4 +188,9 @@ pub fn zeroize_auto<T>(buf: &mut [T]) {
     } else {
         zeroize_func(buf)
     }
+}
+
+#[cfg(not(feature = "std"))]
+pub fn zeroize_auto<T>(buf: &mut [T]) {
+    unsafe { avx2_zeroize(buf) }
 }

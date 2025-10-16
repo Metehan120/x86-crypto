@@ -3,6 +3,9 @@ use core::{
     ops::{Add, BitAnd, BitOr, BitXor, Deref, DerefMut, Mul, Sub},
 };
 
+use macros::stable_api;
+pub use macros::{simd128, simd256};
+
 macro_rules! impl_avx2 {
     ($($operation_name:ident, $simd_operation:ident),+) => {$(
         #[inline(always)]
@@ -430,3 +433,11 @@ pub type u64x4 = SimdU64<4>;
 #[allow(non_camel_case_types)]
 /// 8 byte u64 type for SIMD
 pub type u64x8 = SimdU64<8>;
+
+#[stable_api(since = "0.2.0")]
+#[derive(simd128)]
+pub struct Simd128(pub [u8; 16]);
+
+#[stable_api(since = "0.2.0")]
+#[derive(simd256)]
+pub struct Simd256(pub [u8; 32]);
