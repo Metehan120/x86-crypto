@@ -9,7 +9,7 @@ use x86_crypto::{
 };
 
 fn bench_ctr(c: &mut Criterion) {
-    let aes = Aes256CTR::new(&rand_key::<32>().unwrap()).unwrap();
+    let aes = Aes256CTR::new(&rand_key::<32>(None).unwrap()).unwrap();
     let mut data = vec![0u8; 1024 * 1024 * 100];
     let mut key = [0u8; 32];
     HardwareRNG.try_fill_by(&mut key).unwrap();

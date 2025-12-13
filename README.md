@@ -4,9 +4,11 @@
 
 ---
 
-**Important Note**: Removed TLS support due to security concerns.
+## Important Notice
+x86-crypto is an **experimental project** and is **not recommended for production use**.  
+Use at your own risk. The code is provided **as-is**, without any guarantees.
 
-**Small Note**: v0.2.0-alpha-2 still under development may cause bugs on some systems. Please report any issues to the author.
+**Small Note**: v0.2.0-alpha-3 still under development may cause bugs on some systems. Please report any issues to the author.
 
 ---
 

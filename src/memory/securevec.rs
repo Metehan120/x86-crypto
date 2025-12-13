@@ -5,13 +5,9 @@ use core::{
     ops::{BitOrAssign, BitXor},
     sync::atomic::compiler_fence,
 };
-use std::{
-    alloc::{GlobalAlloc, Layout},
-    os::raw::c_void,
-};
+use std::{alloc::Layout, os::raw::c_void};
 
 use bytemuck::Pod;
-use hmac::{Hmac, Mac};
 use libc::explicit_bzero;
 #[cfg(any(feature = "debug-alloc", feature = "dev-logs"))]
 use log::debug;
@@ -19,8 +15,8 @@ use log::{error, warn};
 #[cfg(feature = "debug-alloc")]
 use log::{info, trace};
 use num_traits::Zero;
-use sha2::Sha256;
 use thiserror_no_std::Error;
+
 #[cfg(feature = "tpm-mem")]
 use tss_esapi::{
     Context,
@@ -39,15 +35,18 @@ use tss_esapi::{
 };
 
 use crate::{
-    constant_time_ops,
-    memory::allocator::{AllocatorError, SECURE_ALLOC, SecureAllocErrorCode},
+    hash::{hmac::HMAC, sha::Sha256},
+    memory::{
+        allocator::{AllocatorError, SECURE_ALLOC, SecureAllocErrorCode},
+        constant_time,
+    },
     rng::{CryptoRNG, HardwareRNG, HardwareRandomizable},
 };
 
 #[cfg(feature = "tpm-mem")]
 use crate::memory::securevec_traits::SecureVecTransform;
 
-type HmacSha256 = Hmac<Sha256>;
+type HmacSha256 = HMAC<32, Sha256>;
 
 /// High-performance secure memory container with automatic zeroization and constant time operations
 ///
@@ -118,7 +117,10 @@ pub struct SecureVec<T> {
 }
 
 impl<T: Pod> SecureVec<T> {
-    pub fn with_capacity(cap: usize) -> Result<Self, AllocatorError> {
+    pub fn with_capacity(
+        cap: usize,
+        madvises: Option<(bool, bool, bool)>,
+    ) -> Result<Self, AllocatorError> {
         if cap == 0 {
             return Err(AllocatorError::NullCapacity(
                 SecureAllocErrorCode::NullCapacity,
@@ -129,8 +131,11 @@ impl<T: Pod> SecureVec<T> {
         info!("SecureVec allocation requested with capacity: {}", cap);
 
         let layout = Layout::array::<T>(cap).expect("Cannot Create Layout");
+
+        // # Safety
+        // This is safe: Because SecureAllocator handles memory allocation and deallocation securely.
         let ptr = unsafe {
-            let raw_ptr = SECURE_ALLOC.alloc(layout);
+            let raw_ptr = SECURE_ALLOC.alloc(layout, madvises);
 
             if raw_ptr.is_null() {
                 return Err(AllocatorError::LockFailed(SecureAllocErrorCode::LockFailed));
@@ -169,6 +174,8 @@ impl<T: Pod> SecureVec<T> {
     where
         T: Copy,
     {
+        // # Safety
+        // This is safe: Because out-of-bounds access is never possible due to the `cap`.
         unsafe {
             self.is_valid()?;
 
@@ -257,11 +264,16 @@ impl<T: Pod> SecureVec<T> {
     }
 
     /// # This function will zeroize and dop the SecureVec / DO NOT USE SECUREVEC AFTER ZEROIZING
-    pub fn zeroize(&mut self) {
+    pub fn zeroize(&mut self, full_safety_mode: bool, deallocate_when_zero_fail: bool) {
         if !self.ptr.is_null() {
             unsafe {
                 let layout = Layout::array::<T>(self.cap).expect("Cannot Create Layout");
-                SECURE_ALLOC.dealloc(self.ptr as *mut u8, layout);
+                SECURE_ALLOC.dealloc(
+                    self.ptr as *mut u8,
+                    layout,
+                    full_safety_mode,
+                    deallocate_when_zero_fail,
+                );
             }
 
             self.ptr = std::ptr::null_mut();
@@ -299,7 +311,7 @@ impl<T> Drop for SecureVec<T> {
 
             let layout = Layout::array::<T>(self.cap).expect("Cannot Create Layout");
             unsafe {
-                SECURE_ALLOC.dealloc(self.ptr as *mut u8, layout);
+                SECURE_ALLOC.dealloc(self.ptr as *mut u8, layout, false, true);
                 compiler_fence(core::sync::atomic::Ordering::SeqCst);
             }
 
@@ -482,10 +494,24 @@ impl SecureSealedHandler {
             Ok(())
         }
     }
+
+    pub fn unseal(
+        self,
+        key: Option<&SecureVec<u8>>,
+        madvises: Option<(bool, bool, bool)>,
+    ) -> Result<SecureVec<u8>, TpmErrors> {
+        SecureVec::unseal(self, key, madvises)
+    }
 }
 
 #[cfg(feature = "tpm-mem")]
 impl SecureVec<u8> {
+    pub fn new_auth_key(madvises: Option<(bool, bool, bool)>) -> Result<Self, AllocatorError> {
+        let mut key = Self::with_capacity(32, madvises)?;
+        key.fill_random(&mut HardwareRNG)?;
+        Ok(key)
+    }
+
     /// Seals data to TPM 2.0 chip using Storage Root Key (SRK)
     ///
     /// # Security
@@ -495,7 +521,11 @@ impl SecureVec<u8> {
     ///
     /// # Panics
     /// Panics if TPM device is unavailable or access denied
-    pub fn seal(&mut self, bigger_tpm: Option<u16>) -> Result<SecureSealedHandler, TpmErrors> {
+    pub fn seal(
+        &mut self,
+        key: Option<&SecureVec<u8>>,
+        bigger_tpm: Option<u16>,
+    ) -> Result<SecureSealedHandler, TpmErrors> {
         let max_size = bigger_tpm.unwrap_or(128);
 
         if self.len > max_size as usize {
@@ -504,6 +534,17 @@ impl SecureVec<u8> {
                 self.len, max_size
             )));
         }
+
+        let key = if let Some(key) = key {
+            use tss_esapi::structures::Auth;
+
+            Some(
+                Auth::try_from(key.as_ref())
+                    .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         let mut ct = Context::new(tss_esapi::TctiNameConf::Device(DeviceConfig::default()))
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
@@ -524,7 +565,7 @@ impl SecureVec<u8> {
             .with_fixed_parent(true)
             .with_sensitive_data_origin(true)
             .with_user_with_auth(true)
-            .with_restricted(true) // SRK bunu ister
+            .with_restricted(true)
             .with_decrypt(true)
             .with_sign_encrypt(false)
             .build()
@@ -567,11 +608,11 @@ impl SecureVec<u8> {
 
         let out = ct
             .execute_with_nullauth_session(|ctx| {
-                ctx.create(pr.key_handle, public, None, Some(sensitive), None, None)
+                ctx.create(pr.key_handle, public, key, Some(sensitive), None, None)
             })
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
 
-        self.zeroize();
+        self.zeroize(true, false);
         Ok(SecureSealedHandler {
             context: ct,
             key_handle: pr.key_handle,
@@ -585,7 +626,13 @@ impl SecureVec<u8> {
     /// # Security
     /// - Data can only be unsealed on the same TPM that sealed it
     /// - Consumes the SecureSealedHandler (single-use)
-    pub fn unseal(mut sealed: SecureSealedHandler) -> Result<SecureVec<u8>, TpmErrors> {
+    pub fn unseal(
+        mut sealed: SecureSealedHandler,
+        key: Option<&SecureVec<u8>>,
+        madvises: Option<(bool, bool, bool)>,
+    ) -> Result<SecureVec<u8>, TpmErrors> {
+        use tss_esapi::interface_types::session_handles::AuthSession;
+
         let sealed_handler = sealed
             .context
             .execute_with_nullauth_session(|ctx| {
@@ -597,9 +644,22 @@ impl SecureVec<u8> {
             })
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
 
+        if let Some(key) = key {
+            use tss_esapi::structures::Auth;
+
+            let auth = Auth::try_from(key.as_ref())
+                .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+            sealed
+                .context
+                .tr_set_auth(sealed_handler.into(), auth)
+                .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
+        }
+
         let unsealed = sealed
             .context
-            .execute_with_nullauth_session(|ctx| ctx.unseal(sealed_handler.into()))
+            .execute_with_sessions((Some(AuthSession::Password), None, None), |ctx| {
+                ctx.unseal(sealed_handler.into())
+            })
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
 
         sealed
@@ -608,34 +668,12 @@ impl SecureVec<u8> {
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?;
 
         Ok(unsealed
-            .to_secure_vec(unsealed.len())
+            .to_secure_vec(unsealed.len(), madvises)
             .map_err(|e| TpmErrors::SecurityViolation(e.to_string()))?)
     }
 }
 
 impl<T: Pod> SecureVec<T> {
-    fn compute_hmac(&self) -> Result<[u8; 32], AllocatorError> {
-        if self.is_dropped {
-            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
-            return Err(AllocatorError::AlreadyDropped(
-                SecureAllocErrorCode::AlreadyDropped,
-            ));
-        }
-
-        let mut mac = HmacSha256::new_from_slice(&self.integrity_key)
-            .map_err(|_| AllocatorError::MacInitFailed)?;
-
-        unsafe {
-            let data = std::slice::from_raw_parts(
-                self.ptr as *const u8,
-                self.len * std::mem::size_of::<T>(),
-            );
-            mac.update(data);
-        }
-
-        Ok(mac.finalize().into_bytes().into())
-    }
-
     fn compute_hmac_key(&self, key: &[u8]) -> Result<[u8; 32], AllocatorError> {
         if self.is_dropped {
             error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
@@ -644,17 +682,18 @@ impl<T: Pod> SecureVec<T> {
             ));
         }
 
-        let mut mac = HmacSha256::new_from_slice(key).map_err(|_| AllocatorError::MacInitFailed)?;
+        let mut mac = HmacSha256::new();
 
+        // # Safety
+        // This is safe: Because SecureVec uses POD (Plain Old Data)
         unsafe {
             let data = std::slice::from_raw_parts(
                 self.ptr as *const u8,
                 self.len * std::mem::size_of::<T>(),
             );
-            mac.update(data);
-        }
 
-        Ok(mac.finalize().into_bytes().into())
+            Ok(mac.finalize(key, data))
+        }
     }
 
     pub fn seal_integrity_with_key(&mut self, key: &[u8]) -> Result<(), AllocatorError> {
@@ -663,27 +702,12 @@ impl<T: Pod> SecureVec<T> {
     }
 
     pub fn seal_integrity(&mut self) -> Result<(), AllocatorError> {
-        self.integrity_tag = self.compute_hmac()?;
+        self.integrity_tag = self.compute_hmac_key(&self.integrity_key)?;
         Ok(())
     }
 
     pub fn verify_sealed_integrity(&self) -> Result<(), AllocatorError> {
-        if self.is_dropped {
-            error!("SECURITY VIOLATION: Attempted to access dropped SecureVec");
-            return Err(AllocatorError::AlreadyDropped(
-                SecureAllocErrorCode::AlreadyDropped,
-            ));
-        }
-
-        let current = self.compute_hmac()?;
-
-        if constant_time_ops::compare_bytes(&current, &self.integrity_tag) != 1 {
-            error!("Integrity check failed for SecureVec");
-            return Err(AllocatorError::LockFailed(
-                SecureAllocErrorCode::CorruptionDetected,
-            ));
-        }
-        Ok(())
+        self.verify_sealed_integrity_with_key(&self.integrity_key)
     }
 
     pub fn verify_sealed_integrity_with_key(&self, key: &[u8]) -> Result<(), AllocatorError> {
@@ -696,7 +720,7 @@ impl<T: Pod> SecureVec<T> {
 
         let current = self.compute_hmac_key(key)?;
 
-        if constant_time_ops::compare_bytes(&current, &self.integrity_tag) != 1 {
+        if constant_time::compare_bytes(&current, &self.integrity_tag) != 1 {
             error!("Integrity check failed for SecureVec");
             return Err(AllocatorError::LockFailed(
                 SecureAllocErrorCode::CorruptionDetected,

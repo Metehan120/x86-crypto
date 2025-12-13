@@ -18,6 +18,8 @@ use thiserror_no_std::Error;
 #[cfg(feature = "debug-alloc")]
 use log::warn;
 
+use crate::rng::{CryptoRNG, HardwareRNG};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecureAllocErrorCode {
     LockFailed,
@@ -146,11 +148,15 @@ pub enum AllocatorError {
     MacInitFailed,
 }
 
+fn init_random() -> u8 {
+    HardwareRNG.generate_unchecked()
+}
+
 #[stable_api(since = "0.2.0")]
 pub struct SecureAllocator;
 
-unsafe impl GlobalAlloc for SecureAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+impl SecureAllocator {
+    pub unsafe fn alloc(&self, layout: Layout, madvises: Option<(bool, bool, bool)>) -> *mut u8 {
         if layout.size() == 0 {
             return std::ptr::null_mut();
         }
@@ -176,40 +182,54 @@ unsafe impl GlobalAlloc for SecureAllocator {
 
         unsafe {
             let ptr = System.alloc(layout);
+
             if !ptr.is_null() {
                 #[cfg(target_os = "linux")]
                 {
                     if mlock2(ptr as *mut libc::c_void, layout.size(), libc::MLOCK_ONFAULT) != 0
                         && mlock(ptr as *mut libc::c_void, layout.size()) != 0
                     {
+                        error!("MLOCK failed (errno={})", *libc::__errno_location());
                         System.dealloc(ptr, layout);
                         return std::ptr::null_mut();
                     }
 
-                    let _res = madvise(ptr as *mut c_void, layout.size(), libc::MADV_DONTDUMP);
-                    #[cfg(feature = "debug-alloc")]
-                    if _res != 0 {
-                        warn!("madvise(MADV_DONTDUMP) failed (errno={})", unsafe {
-                            *libc::__errno_location()
-                        });
-                    }
+                    if let Some(madvises) = madvises {
+                        if madvises.0 {
+                            let _res =
+                                madvise(ptr as *mut c_void, layout.size(), libc::MADV_DONTDUMP);
+                            #[cfg(feature = "debug-alloc")]
+                            if _res != 0 {
+                                warn!(
+                                    "madvise(MADV_DONTDUMP) failed (errno={})",
+                                    *libc::__errno_location()
+                                );
+                            }
+                        }
 
-                    let _res = madvise(ptr as *mut c_void, layout.size(), libc::MADV_WIPEONFORK);
-                    #[cfg(feature = "debug-alloc")]
-                    if _res != 0 {
-                        warn!(
-                            "madvise(MADV_WIPEONFORK) failed or unsupported (errno={})",
-                            unsafe { *libc::__errno_location() }
-                        );
-                    }
+                        if madvises.1 {
+                            let _res =
+                                madvise(ptr as *mut c_void, layout.size(), libc::MADV_WIPEONFORK);
+                            #[cfg(feature = "debug-alloc")]
+                            if _res != 0 {
+                                warn!(
+                                    "madvise(MADV_WIPEONFORK) failed or unsupported (errno={})",
+                                    *libc::__errno_location()
+                                );
+                            }
+                        }
 
-                    let _res = madvise(ptr as *mut c_void, layout.size(), libc::MADV_DONTFORK);
-                    #[cfg(feature = "debug-alloc")]
-                    if _res != 0 {
-                        warn!(
-                            "madvise(MADV_DONTFORK) failed or unsupported (errno={})",
-                            unsafe { *libc::__errno_location() }
-                        );
+                        if madvises.2 {
+                            let _res =
+                                madvise(ptr as *mut c_void, layout.size(), libc::MADV_DONTFORK);
+                            #[cfg(feature = "debug-alloc")]
+                            if _res != 0 {
+                                warn!(
+                                    "madvise(MADV_DONTFORK) failed or unsupported (errno={})",
+                                    *libc::__errno_location()
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -221,38 +241,53 @@ unsafe impl GlobalAlloc for SecureAllocator {
                     }
                 }
 
-                std::ptr::write_bytes(ptr, 0, layout.size());
+                let random = init_random();
+                std::ptr::write_bytes(ptr, random, layout.size());
             }
+
+            compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            _mm_sfence();
 
             ptr
         }
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    pub unsafe fn dealloc(
+        &self,
+        ptr: *mut u8,
+        layout: Layout,
+        secure_dealloc: bool,
+        deallocate_when_zero_fail: bool,
+    ) {
         unsafe {
             if !ptr.is_null() {
                 let size = layout.size();
 
-                explicit_bzero(ptr as *mut c_void, size);
-                compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                _mm_sfence();
+                if !secure_dealloc {
+                    explicit_bzero(ptr as *mut c_void, size);
+                    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                    _mm_sfence();
+                } else {
+                    explicit_bzero(ptr as *mut c_void, size);
+                    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                    _mm_sfence();
 
-                std::ptr::write_bytes(ptr, 0xFF, size);
-                compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                _mm_sfence();
+                    std::ptr::write_bytes(ptr, 0xFF, size);
+                    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                    _mm_sfence();
 
-                explicit_bzero(ptr as *mut c_void, size);
-                compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                _mm_sfence();
+                    explicit_bzero(ptr as *mut c_void, size);
+                    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                    _mm_sfence();
+                }
 
                 for i in 0..size {
                     let byte = std::ptr::read_volatile(ptr.add(i));
                     if byte != 0 {
-                        error!(
-                            "FATAL: Memory wipe failed at offset {} (got 0x{:02X})",
-                            i, byte
-                        );
-                        return;
+                        error!("FATAL: Memory wipe failed at offset {}", i);
+                        if !deallocate_when_zero_fail {
+                            return;
+                        }
                     }
                 }
 
@@ -269,6 +304,9 @@ unsafe impl GlobalAlloc for SecureAllocator {
 
                 System.dealloc(ptr, layout);
             }
+
+            compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            _mm_sfence();
         }
     }
 }

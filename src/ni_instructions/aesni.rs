@@ -154,6 +154,7 @@ pub trait AES {
     fn perform_aes256_rounds_block(&self, round_keys: &__rsi256keys, chunk: __m128i) -> __m128i;
     fn perform_aes256_inv_rounds_block(&self, round_keys: __rsi256keys, chunk: __m128i) -> __m128i;
     fn expand_aes256_key(&self, key: [__m128i; 2]) -> __rsi256keys;
+    fn expand_aes128_key(&self, key: __m128i) -> __rsi128keys;
 }
 
 impl AES for AES_NI {
@@ -260,5 +261,35 @@ impl AES for AES_NI {
         trace!("Key expansion completed (11 rounds)");
 
         loadu_keys_256(round_keys)
+    }
+
+    #[inline(always)]
+    fn expand_aes128_key(&self, key: __m128i) -> __rsi128keys {
+        let mut round_keys = [unsafe { core::mem::zeroed() }; 11];
+        round_keys[0] = key;
+
+        let mut curr = key;
+
+        for i in 1..=10 {
+            let temp = match i {
+                1 => self.aes_key_gen_assist::<0x01>(curr),
+                2 => self.aes_key_gen_assist::<0x02>(curr),
+                3 => self.aes_key_gen_assist::<0x04>(curr),
+                4 => self.aes_key_gen_assist::<0x08>(curr),
+                5 => self.aes_key_gen_assist::<0x10>(curr),
+                6 => self.aes_key_gen_assist::<0x20>(curr),
+                7 => self.aes_key_gen_assist::<0x40>(curr),
+                8 => self.aes_key_gen_assist::<0x80>(curr),
+                9 => self.aes_key_gen_assist::<0x1B>(curr),
+                10 => self.aes_key_gen_assist::<0x36>(curr),
+                _ => unreachable!(),
+            };
+
+            let broadcast = unsafe { _mm_shuffle_epi32(temp, 0xff) };
+            curr = self.key_schedule_assist(curr, broadcast);
+            round_keys[i] = curr;
+        }
+
+        loadu_keys_128(round_keys)
     }
 }

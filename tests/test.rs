@@ -22,14 +22,6 @@ fn cipher_test() {
 }
 
 #[test]
-fn memory_test() {
-    let mut buffer: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
-    buffer.fill(1).unwrap();
-
-    println!("{:?}", &buffer[..]);
-}
-
-#[test]
 fn decrypt_rejects_modified_tag() {
     use crate::ciphers::aes_cipher::AesError;
     use crate::ciphers::vaes_cipher::{Nonce192, Vaes256};
@@ -58,10 +50,10 @@ fn general() {
 
     let start = Instant::now();
     let mut data = vec![1u8; 256];
-    let mut key: SecureVec<u8> = SecureVec::with_capacity(32).unwrap();
+    let mut key: SecureVec<u8> = SecureVec::with_capacity(32, None).unwrap();
     key.fill_random(&mut HWChaCha20Rng::new(true).unwrap())
         .unwrap();
-    let mut key2 = SecureVec::with_capacity(32).unwrap();
+    let mut key2 = SecureVec::with_capacity(32, None).unwrap();
     key2.fill(0).unwrap();
     key2.copy_from_slice(&key);
 
@@ -79,12 +71,12 @@ fn general() {
 
     ctr.decrypt_inplace(&mut output, nonce).unwrap();
 
-    key.zeroize();
+    key.zeroize(false, false);
     data.zeroize();
 
     let mut output = vec![0u32; 256];
     output.zeroize();
-    let mut vec = SecureVec::with_capacity(256).unwrap();
+    let mut vec = SecureVec::with_capacity(256, None).unwrap();
     vec.extend_from_slice(&[0u32; 256]).unwrap();
 
     let data = unsafe { vec![0u8; 16].load_128() };
@@ -94,13 +86,13 @@ fn general() {
     println!("{:?}", start.elapsed())
 }
 
-use aes_gcm::{
-    Aes256Gcm,
-    aead::{Aead, KeyInit},
-};
-
 #[test]
 fn compare_with_aes_gcm_no_aad() {
+    use aes_gcm::{
+        Aes256Gcm,
+        aead::{Aead, KeyInit},
+    };
+
     let key = [0x11u8; 32];
     let nonce = [0x22u8; 12];
 
@@ -133,6 +125,11 @@ fn compare_with_aes_gcm_no_aad() {
 
 #[test]
 fn compare_with_aes_gcm_with_aad_and_tails() {
+    use aes_gcm::{
+        Aes256Gcm,
+        aead::{Aead, KeyInit},
+    };
+
     let key = [0x5Au8; 32];
     let nonce = [0xC3u8; 12];
     let aad = b"associated-data-123";

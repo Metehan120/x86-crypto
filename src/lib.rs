@@ -94,6 +94,11 @@ pub mod memory {
         /// CPUs without SSE4.2 are not supported.
         pub mod zeroize;
     );
+
+    stable! {
+        since = "0.2.0",
+        pub mod constant_time;
+    }
 }
 
 /// Low-level cache manipulation operations for timing analysis and performance optimization.
@@ -148,6 +153,11 @@ pub mod ni_instructions {
         /// \- VAES intrinsic module
         pub mod vaes;
     );
+}
+
+pub mod hash {
+    pub mod hmac;
+    pub mod sha;
 }
 
 /// SIMD-accelerated operations using AVX2 for high-performance parallel computing.
@@ -431,115 +441,6 @@ pub trait BasicStaticalTests {
 pub struct EntropyAnalyzer;
 impl BasicStaticalTests for EntropyAnalyzer {}
 
-/// Constant-time operations to prevent timing side-channel attacks.
-///
-/// All operations in this module execute in constant time regardless of input values,
-/// making them safe for cryptographic applications where timing leaks could reveal
-/// sensitive information.
-pub mod constant_time_ops {
-    use core::{
-        arch::x86_64::{_MM_HINT_T0, _mm_prefetch, _mm_sfence},
-        hint::black_box,
-        sync::atomic::compiler_fence,
-    };
-
-    #[inline(always)]
-    /// Constant-time conditional selection between two u8 values.
-    ///
-    /// Returns `a` if condition is 1, `b` if condition is 0.
-    /// Executes in constant time regardless of condition value.
-    pub fn select_u8(condition: u8, a: u8, b: u8) -> u8 {
-        let mask = condition.wrapping_sub(1);
-        (a & mask) | (b & !mask)
-    }
-
-    #[inline(always)]
-    /// Constant-time byte array comparison.
-    ///
-    /// Returns 1 if arrays are equal, 0 otherwise.
-    /// Always processes entire arrays to prevent timing attacks.
-    pub fn compare_bytes(a: &[u8], b: &[u8]) -> u8 {
-        if a.len() != b.len() {
-            return 0;
-        }
-
-        unsafe { _mm_prefetch(a.as_ptr() as *const i8, _MM_HINT_T0) };
-        unsafe { _mm_prefetch(b.as_ptr() as *const i8, _MM_HINT_T0) };
-
-        let mut result = 0u8;
-        for i in black_box(0..a.len()) {
-            black_box(result |= a[i] ^ b[i]);
-        }
-
-        unsafe { _mm_sfence() };
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-
-        ((result as u16).wrapping_sub(1) >> 8) as u8
-    }
-
-    #[inline(always)]
-    /// Constant-time conditional assignment of byte arrays.
-    ///
-    /// Copies `source` to `target` if condition is 1, leaves unchanged if 0.
-    /// Processes all bytes regardless of condition to maintain constant timing.
-    pub fn conditional_assign(condition: u8, target: &mut [u8], source: &[u8]) {
-        let mask = condition.wrapping_sub(1);
-        for i in 0..target.len().min(source.len()) {
-            target[i] = (target[i] & mask) | (source[i] & !mask);
-        }
-    }
-
-    /// Constant-time conditional clearing of byte array.
-    ///
-    /// Clears data if condition is 1, leaves unchanged if 0.
-    /// Always processes entire array for timing safety.
-    pub fn clear_on_condition(condition: u8, data: &mut [u8]) {
-        let mask = condition.wrapping_sub(1);
-        for byte in data.iter_mut() {
-            *byte &= mask;
-        }
-    }
-}
-
-/// Timing-safe utilities for cryptographic operations.
-///
-/// Provides operations designed to resist timing analysis attacks through
-/// consistent execution patterns and controlled timing variations.
-pub mod timing_safe {
-    use core::hint::black_box;
-
-    #[cfg(feature = "std")]
-    use crate::rng::{CryptoRNG, HardwareRNG};
-
-    #[inline(always)]
-    /// Timing-safe memory comparison.
-    ///
-    /// Unlike standard memcmp, always processes entire arrays regardless
-    /// of where differences occur, preventing early-exit timing leaks.
-    pub fn memcmp_secure(a: &[u8], b: &[u8]) -> bool {
-        if a.len() != b.len() {
-            return false;
-        }
-
-        let mut result = 0u8;
-        for i in black_box(0..a.len()) {
-            result |= a[i] ^ b[i];
-        }
-        result == 0
-    }
-
-    #[inline(always)]
-    #[cfg(feature = "std")]
-    /// Introduces random timing jitter to mask operation timing.
-    ///
-    /// Adds 0-1000 microseconds of random sleep to prevent timing analysis.
-    /// Useful for protecting critical sections from remote timing attacks.
-    pub fn secure_sleep_jitter() {
-        let jitter: u32 = HardwareRNG.try_generate().unwrap_or(100) % 1000;
-        std::thread::sleep(std::time::Duration::from_micros(jitter as u64));
-    }
-}
-
 #[cfg(feature = "std")]
 pub struct CpuFeatures;
 
@@ -690,7 +591,7 @@ mod constant_time_tests {
 
     #[test]
     fn test_select_u8_timing() {
-        use crate::constant_time_ops::select_u8;
+        use crate::memory::constant_time::select_u8;
         use crate::rng::HardwareRNG;
 
         const WARMUP: usize = 2048;
@@ -856,8 +757,11 @@ pub mod key {
     pub struct KeyGenerator(SecureVec<u8>);
 
     impl KeyGenerator {
-        pub fn new(cap: usize) -> Result<Self, AllocatorError> {
-            let mut vec = SecureVec::with_capacity(cap)?;
+        pub fn new(
+            cap: usize,
+            madvises: Option<(bool, bool, bool)>,
+        ) -> Result<Self, AllocatorError> {
+            let mut vec = SecureVec::with_capacity(cap, madvises)?;
             vec.fill(0)?;
             Ok(Self(vec))
         }
@@ -908,8 +812,10 @@ pub mod key {
         KeyError(String),
     }
 
-    pub fn rand_key<const U: usize>() -> Result<KeyGenerator, KeyGenError> {
-        KeyGenerator::new(U)
+    pub fn rand_key<const U: usize>(
+        madvises: Option<(bool, bool, bool)>,
+    ) -> Result<KeyGenerator, KeyGenError> {
+        KeyGenerator::new(U, madvises)
             .map_err(|e| KeyGenError::KeyError(e.to_string()))?
             .generate(&mut HardwareRNG)
             .map_err(|e| KeyGenError::KeyError(e.to_string()))

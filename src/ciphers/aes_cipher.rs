@@ -18,7 +18,7 @@ use universal_hash::{Key, KeyInit, UniversalHash};
 use crate::ciphers::general::PrefetchMode;
 use crate::{
     ciphers::general::{Payload, PayloadMut},
-    constant_time_ops,
+    memory::constant_time,
     memory::zeroize::Zeroizeable,
     ni_instructions::aesni::{__rsi256keys, AES, AES_NI, LoadRegister, StoreRegister},
     rng::CryptoRNG,
@@ -106,7 +106,7 @@ macro_rules! impl_tag {
         #[allow(deprecated)]
         impl PartialEq for $tag {
             fn eq(&self, other: &Self) -> bool {
-                constant_time_ops::compare_bytes(&self.0, &other.0) == 1
+                constant_time::compare_bytes(&self.0, &other.0) == 1
             }
         }
 
@@ -293,13 +293,13 @@ impl Aes256CTR {
 
         let (main_body, tail) = data.split_at_mut(main_body_len);
 
+        payload.prefetch_mode.perform(nonce.as_slice());
+
         main_body
             .par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let mut iv = [0u8; 16];
-
-                payload.prefetch_mode.perform(nonce.as_slice());
 
                 iv[..12].copy_from_slice(&nonce.0);
                 iv[12..]
@@ -531,13 +531,13 @@ impl Aes256 {
 
         let (main_body, tail) = src.split_at_mut(main_body_len);
 
+        prefetch.perform(nonce.as_slice());
+
         main_body
             .par_chunks_exact_mut(chunk_size)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let mut iv = [0u8; 16];
-
-                prefetch.perform(nonce.as_slice());
 
                 iv[..12].copy_from_slice(&nonce.0);
                 iv[12..]
@@ -685,7 +685,7 @@ impl Aes256 {
         let mut ciphertext = ciphertext.to_vec();
 
         let mut computed_tag = self.compute_tag(payload.aad, nonce.0, &ciphertext);
-        if constant_time_ops::compare_bytes(&received_tag, &computed_tag) == 0 {
+        if constant_time::compare_bytes(&received_tag, &computed_tag) == 0 {
             use crate::memory::zeroize::Zeroizeable;
 
             #[cfg(feature = "dev-logs")]
@@ -716,7 +716,7 @@ impl Aes256 {
         let payload: PayloadMut<'aad, 'msg> = payload.into();
 
         let mut computed_tag = self.compute_tag(payload.aad, nonce.0, payload.msg);
-        if constant_time_ops::compare_bytes(tag.as_bytes(), &computed_tag) == 0 {
+        if constant_time::compare_bytes(tag.as_bytes(), &computed_tag) == 0 {
             #[cfg(feature = "dev-logs")]
             debug!("Expected tag: {:02x?}", computed_tag);
             #[cfg(feature = "dev-logs")]
