@@ -125,4 +125,4 @@ Licensed under MIT.
 
 ## Maintainer
 - Metehan Eyyub Zaferoğlu
-- metehan@zaferoglu.me
+- metehanzafer@proton.me
